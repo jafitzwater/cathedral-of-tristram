@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { Game } from '../src/game';
-import { saveGame, loadGame, listHeroes, deleteHero, serialize } from '../src/save';
+import { saveGame, loadGame, listHeroes, deleteHero, serialize, deserialize } from '../src/save';
 import { getItemAttrs } from '../src/itemgen';
 import { idxOf } from '../src/data/items';
 
@@ -17,6 +17,7 @@ g.operate(chest);
 const sword = getItemAttrs(g.rng, idxOf('Long Sword'), 5); g.drop(sword, g.p.tx, g.p.ty);
 g.hero.gold = 777; g.hero.statPts = 3; g.hero.base.str += 2; g.quests.butcher = 'active';
 g.explore();
+{ const old = JSON.parse(JSON.stringify(serialize(g))); delete old.hero.slots; const mg = deserialize(old); assert.deepEqual(mg.hero.slots, [null, null, null, null], "pre-Order-4 save gets default slots"); assert.equal(mg.l1Seed, g.l1Seed); }
 saveGame(st, g);
 assert.deepEqual(listHeroes(st), ['Aidan']);
 const g2 = loadGame(st, 'Aidan')!;

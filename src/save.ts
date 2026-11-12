@@ -48,7 +48,8 @@ export function deserialize(s: SaveData): Game {
   if (s.v !== SAVE_VERSION) throw new Error(`save version ${s.v} not supported`);
   const g = new Game(s.hero.name, s.hero.cls, 1);
   g.hero = s.hero;
-  if (!Array.isArray(g.hero.slots)) g.hero.slots = defaultSlots(g.hero.cls, g.hero.spells, null); // pre-Order-4 saves g.l1Seed = s.l1Seed;
+ g.l1Seed = s.l1Seed;
+  if (!Array.isArray(g.hero.slots)) g.hero.slots = defaultSlots(g.hero.cls, g.hero.spells, null); // pre-Order-4 saves
   g.quests = s.quests; g.stores = s.stores; g.portal = s.portal; g.townDead = new Set(s.townDead);
   setUidSeq(s.uid);
   for (const [id, sl] of Object.entries(s.levels) as [LevelId, SavedLevel][]) {
