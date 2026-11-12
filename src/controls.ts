@@ -32,7 +32,9 @@ export function knob(ox: number, oy: number, tx: number, ty: number, radius = JO
 export const SECTOR_DIR = [6, 7, 0, 1, 2, 3, 4, 5] as const;
 export const DIR_SECTOR = SECTOR_DIR.reduce((o, d, k) => { o[d] = k; return o; }, [] as number[]);
 export const STICK_HYSTERESIS_DEG = 8;
-export const HERO_RADIUS = 0.35; // tiles: the hero's collision circle
+export const HERO_RADIUS = 0.3; // tiles: the hero's collision circle (Order 10 B1: 0.35 -> 0.3)
+/** Monster collision circle: with the hero's 0.3 the centres stay >= 0.72 apart, so the hero can never share a monster's tile. */
+export const MON_RADIUS = 0.42;
 const DEG = 180 / Math.PI;
 /** Stick angle in degrees, 0..360, screen space (0 = right, 90 = down). */
 export const stickAngle = (jx: number, jy: number) => ((Math.atan2(jy, jx) * DEG) % 360 + 360) % 360;
@@ -70,30 +72,65 @@ export function faceToward(dx: number, dy: number, fallback: number): number {
   const d = stickDir({ x: s.x, y: s.y, mag: 1 });
   return d < 0 ? fallback : d;
 }
+export interface Circle { x: number; y: number; r: number }
 /**
- * Move a circle of radius r from (x, y) by (dx, dy) against blocked tiles (tile k spans k-0.5..k+0.5). Sub-stepped; a blocked step
- * slides by dropping the blocked world axis (walls are axis-aligned in tile space). Diagonal wall gaps are closed because the two
- * wall squares touch at the corner. An overlap that already exists (an actor stepped next to the hero) may shrink but never grow.
+ * Move a circle of radius r from (x, y) by (dx, dy) against blocked tile squares (tile k spans k-0.5..k+0.5) and other actors'
+ * circles. Sub-stepped. A blocked step slides along the contact: the step loses its component into the contact normal (walls,
+ * door jambs and corners deflect the hero into a gap; an actor's circle is walked around, and a dead-centre bump picks the free
+ * side). Diagonally touching wall squares leave no gap, so no corner cutting. An overlap that already exists may shrink but
+ * never grow, so the hero never sticks. `reserved` (optional) forbids the centre entering a tile another actor holds.
  */
-export function moveCircle(x: number, y: number, dx: number, dy: number, r: number, blocked: (tx: number, ty: number) => boolean): P {
-  const pen = (px: number, py: number, tx: number, ty: number) => {
-    const cx = Math.max(tx - 0.5, Math.min(tx + 0.5, px)), cy = Math.max(ty - 0.5, Math.min(ty + 0.5, py));
-    return r - Math.hypot(px - cx, py - cy);
-  };
-  const ok = (ox: number, oy: number, nx: number, ny: number) => {
+export function moveCircle(x: number, y: number, dx: number, dy: number, r: number, blocked: (tx: number, ty: number) => boolean,
+  circles: Circle[] = [], reserved?: (tx: number, ty: number) => boolean): P {
+  const boxPt = (px: number, py: number, tx: number, ty: number) => ({ x: Math.max(tx - 0.5, Math.min(tx + 0.5, px)), y: Math.max(ty - 0.5, Math.min(ty + 0.5, py)) });
+  const boxPen = (px: number, py: number, tx: number, ty: number) => { const c = boxPt(px, py, tx, ty); return r - Math.hypot(px - c.x, py - c.y); };
+  const cPen = (px: number, py: number, c: Circle) => r + c.r - Math.hypot(px - c.x, py - c.y);
+  /** The worst new contact for a move (null = free): its outward normal at the new position. */
+  const contact = (ox: number, oy: number, nx: number, ny: number): (P & { actor?: boolean }) | false | null => {
+    let worst = 1e-9, n: (P & { actor?: boolean }) | null = null;
     for (let ty = Math.round(ny - r); ty <= Math.round(ny + r); ty++) for (let tx = Math.round(nx - r); tx <= Math.round(nx + r); tx++) {
-      const p = pen(nx, ny, tx, ty);
-      if (p > 1e-9 && blocked(tx, ty) && p > pen(ox, oy, tx, ty) + 1e-9) return false;
+      const pn = boxPen(nx, ny, tx, ty);
+      if (pn <= 1e-9 || !blocked(tx, ty)) continue;
+      const grow = pn - Math.max(0, boxPen(ox, oy, tx, ty));
+      if (grow > worst) {
+        worst = grow; const c = boxPt(nx, ny, tx, ty), l = Math.hypot(nx - c.x, ny - c.y);
+        n = l > 1e-9 ? { x: (nx - c.x) / l, y: (ny - c.y) / l } : (Math.abs(nx - tx) > Math.abs(ny - ty) ? { x: Math.sign(nx - tx), y: 0 } : { x: 0, y: Math.sign(ny - ty) || 1 });
+      }
     }
-    return true;
+    for (const c of circles) {
+      const pn = cPen(nx, ny, c);
+      if (pn <= 1e-9) continue;
+      const grow = pn - Math.max(0, cPen(ox, oy, c));
+      if (grow > worst) { worst = grow; const l = Math.hypot(nx - c.x, ny - c.y) || 1; n = { x: (nx - c.x) / l, y: (ny - c.y) / l, actor: true }; }
+    }
+    if (!n && reserved && (Math.round(nx) !== Math.round(ox) || Math.round(ny) !== Math.round(oy)) && reserved(Math.round(nx), Math.round(ny))) return false;
+    return n;
   };
-  const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 0.02)), sx = dx / n, sy = dy / n;
+  const free = (ox: number, oy: number, nx: number, ny: number) => contact(ox, oy, nx, ny) === null;
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 0.02)), sx = dx / n, sy = dy / n, sl = Math.hypot(sx, sy);
   for (let i = 0; i < n; i++) {
-    if (ok(x, y, x + sx, y + sy)) { x += sx; y += sy; continue; }
-    const ax = ok(x, y, x + sx, y), ay = ok(x, y, x, y + sy);
-    if (ax && (!ay || Math.abs(sx) >= Math.abs(sy))) x += sx;
-    else if (ay) y += sy;
-    else break;
+    const c = contact(x, y, x + sx, y + sy);
+    if (c === null) { x += sx; y += sy; continue; }
+    const tries: [number, number][] = [];
+    if (c) {
+      const into = sx * c.x + sy * c.y;
+      let tx = sx - c.x * Math.min(0, into), ty = sy - c.y * Math.min(0, into);
+      if (c.actor && Math.hypot(tx, ty) < 0.35 * sl) { // dead-centre bump into an actor: step round it, side nearest the stick first
+        const px = -c.y, py = c.x, k = 0.7 * sl;
+        // the side with room to get past (probe a body-width out), else the side the stick leans to
+        const room = (sg: number) => free(x, y, x + px * sg * 0.75, y + py * sg * 0.75);
+        const ra = room(1), rb = room(-1);
+        const side = ra !== rb ? (ra ? 1 : -1) : (sx * py - sy * px) >= 0 ? 1 : -1;
+        tries.push([tx + px * k * side, ty + py * k * side], [tx - px * k * side, ty - py * k * side]);
+      }
+      // the tangent of a curved contact (an actor's circle, a jamb corner) dips into it by a hair: also try it lifted off a little
+      const tl = Math.hypot(tx, ty);
+      tries.push([tx, ty], [tx + c.x * 0.35 * tl, ty + c.y * 0.35 * tl]);
+    }
+    tries.push(Math.abs(sx) >= Math.abs(sy) ? [sx, 0] : [0, sy], Math.abs(sx) >= Math.abs(sy) ? [0, sy] : [sx, 0]);
+    let moved = false;
+    for (const [mx, my] of tries) if (Math.hypot(mx, my) > 1e-9 && free(x, y, x + mx, y + my)) { x += mx; y += my; moved = true; break; }
+    if (!moved) break;
   }
   return { x, y };
 }
@@ -102,19 +139,24 @@ export interface Cand { id: number; x: number; y: number }
 /**
  * Soft-lock target choice for the ATTACK button: keep the locked target while it is alive, visible and within lockRange;
  * otherwise the nearest visible candidate within range, biased toward the facing / stick direction.
+ * Order 10 B2: a monster in melee reach (any of the 8 neighbour tiles) always beats a farther one, whatever the hero faces, and
+ * a lock on a farther monster yields to it, so the hero never turns away from the monster hitting him to chase one ahead.
  */
 export function pickTarget(px: number, py: number, facing: P | null, cands: Cand[], lockedId: number | null, range: number, lockRange: number, visible: (c: Cand) => boolean): Cand | null {
-  const dist = (c: Cand) => Math.max(Math.abs(c.x - px), Math.abs(c.y - py)) + 0.01 * Math.hypot(c.x - px, c.y - py);
+  const cheb = (c: Cand) => Math.max(Math.abs(c.x - px), Math.abs(c.y - py));
+  const dist = (c: Cand) => cheb(c) + 0.01 * Math.hypot(c.x - px, c.y - py);
+  const reach = cands.filter((c) => cheb(c) <= 1 && visible(c));
   if (lockedId !== null) {
     const l = cands.find((c) => c.id === lockedId);
-    if (l && dist(l) <= lockRange && visible(l)) return l;
+    if (l && dist(l) <= lockRange && visible(l) && (cheb(l) <= 1 || !reach.length)) return l;
   }
+  const pool = reach.length ? reach : cands;
   let best: Cand | null = null, bs = Infinity;
-  for (const c of cands) {
+  for (const c of pool) {
     const d = dist(c);
     if (d > range || !visible(c)) continue;
     let s = d;
-    if (facing) { const vx = c.x - px, vy = c.y - py, l = Math.hypot(vx, vy) || 1; s -= ((vx * facing.x + vy * facing.y) / l) * 1.25; }
+    if (facing) { const vx = c.x - px, vy = c.y - py, l = Math.hypot(vx, vy) || 1; s -= ((vx * facing.x + vy * facing.y) / l) * (reach.length ? 0.001 : 1.25); }
     if (s < bs) { bs = s; best = c; }
   }
   return best;

@@ -6,7 +6,7 @@ import { BASE, IDI } from './data/items';
 import { NPC_TEXT } from './data/npcs';
 import { findPath } from './path';
 import { DIRS, dirOf, type P } from './iso';
-import { pickTarget, stickDir, faceToward, moveCircle, screenToWorldDir, HERO_RADIUS, interactFor, type Joy, type Interact } from './controls';
+import { pickTarget, stickDir, faceToward, moveCircle, screenToWorldDir, HERO_RADIUS, MON_RADIUS, interactFor, type Joy, type Interact } from './controls';
 import { Rng } from './rng';
 import { T, WALKABLE, at, setT, type LevelMap, type Obj } from './levels/types';
 import { makeTown, NPCS, TOWN_FROM_CATHEDRAL, TOWN_PORTAL_SPOT, TOWN_START, type NpcDef } from './levels/town';
@@ -422,7 +422,13 @@ export class Game {
   /** Move the hero's 0.35-tile circle with wall sliding; returns true when it moved. Fires the tile rules on a tile change. */
   moveHero(dx: number, dy: number): boolean {
     const p = this.p, ox = p.x, oy = p.y, otx = p.tx, oty = p.ty;
-    const q = moveCircle(p.x, p.y, dx, dy, HERO_RADIUS, (x, y) => !this.free(x, y, p));
+    // Order 10 B1: walls, closed doors, objects and NPCs are tile squares; monsters are circles the hero slides round; a tile a
+    // monster stands on or is stepping into can't take the hero's centre (D1 tile occupancy stays exact).
+    const npcs = this.npcs();
+    const mons = this.level.monsters.filter((m) => m.alive && Math.abs(m.x - p.x) < 3 && Math.abs(m.y - p.y) < 3);
+    const q = moveCircle(p.x, p.y, dx, dy, HERO_RADIUS, (x, y) => !this.tileWalk(x, y) || npcs.some((n) => n.x === x && n.y === y),
+      mons.map((m) => ({ x: m.x, y: m.y, r: MON_RADIUS })),
+      (x, y) => mons.some((m) => (m.tx === x && m.ty === y) || (m.prog > 0 && m.path[0] && m.path[0].x === x && m.path[0].y === y)));
     p.x = q.x; p.y = q.y; this.heroTile();
     if (p.tx !== otx || p.ty !== oty) this.onPlayerTile();
     return Math.hypot(p.x - ox, p.y - oy) > 1e-6;
@@ -489,6 +495,8 @@ export class Game {
       this.missiles.push({ kind: 'arrow', x: this.p.x, y: this.p.y, vx: ux / l * 16, vy: uy / l * 16, life: 1.2, dmg: [-1, -1], fire: [d.weapon?.fMin ?? 0, d.weapon?.fMax ?? 0], light: [d.weapon?.lMin ?? 0, d.weapon?.lMax ?? 0], toHit: bowToHit(h, d, m.def.ac) });
       return;
     }
+    // Order 10 B2: melee lands on a target in any of the 8 neighbour tiles of the hero's tile (D1 tile adjacency)
+    if (Math.max(Math.abs(m.tx - this.p.tx), Math.abs(m.ty - this.p.ty)) > 1) { this.sfx.push('miss'); return; }
     if (this.rng.int(100) >= meleeToHit(h, d, m.def.ac)) { this.sfx.push('miss'); return; }
     let dam = rollDamage(h, d, this.rng);
     const w = d.weapon;
@@ -585,6 +593,11 @@ export class Game {
     if (pl.to === 'town' && from !== 'town') this.restock();
     this.sfx.push(pl.to === 'town' ? 'music_town' : 'music_l1');
   }
+  /** Order 10 B3: does the hero's circle overlap tile (x, y)? (D1 won't close a door with someone standing in it.) */
+  heroOverlaps(x: number, y: number) {
+    const p = this.p, cx = Math.max(x - 0.5, Math.min(x + 0.5, p.x)), cy = Math.max(y - 0.5, Math.min(y + 0.5, p.y));
+    return Math.hypot(p.x - cx, p.y - cy) < HERO_RADIUS - 1e-9;
+  }
   nearestFree(q: P): P {
     for (let r = 0; r < 6; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (this.free(q.x + dx, q.y + dy)) return { x: q.x + dx, y: q.y + dy };
     return q;
@@ -592,7 +605,7 @@ export class Game {
   toggleDoor(x: number, y: number) {
     const m = this.level.map, t = at(m, x, y);
     if (t === T.DOOR) { setT(m, x, y, T.DOOR_OPEN); this.sfx.push('door'); }
-    else if (t === T.DOOR_OPEN && !this.occupied(x, y) && !this.level.items.some((g) => g.x === x && g.y === y)) { setT(m, x, y, T.DOOR); this.sfx.push('door'); }
+    else if (t === T.DOOR_OPEN && !this.occupied(x, y) && !this.heroOverlaps(x, y) && !this.level.items.some((g) => g.x === x && g.y === y)) { setT(m, x, y, T.DOOR); this.sfx.push('door'); }
     // Butcher wakes when his door opens
     const br = m.butcherRoom;
     if (br && t === T.DOOR) for (const mm of this.level.monsters) if (mm.def.id === 'butcher') mm.active = true;
