@@ -650,7 +650,7 @@ export class Game {
     o.used = true; this.sfx.push('barrel');
     const r = new Rng(o.seed);
     if (o.kind === 'barrel_ex') {
-      // OBJ_BARRELEX: 1-4 fire damage to monsters and 8-16 to the player in the 3x3 around it.
+      // OBJ_BARRELEX: D1's 1-4 fire damage to monsters in the 3x3 around it; the hero takes U2's barrelDamage.
       for (const m of this.level.monsters) if (m.alive && Math.abs(m.tx - o.x) <= 1 && Math.abs(m.ty - o.y) <= 1) this.hurtMon(m, this.elemental(m, 'fire', 1 + r.int(4)));
       if (Math.abs(this.p.tx - o.x) <= 1 && Math.abs(this.p.ty - o.y) <= 1) this.hurtPlayer(this.barrelDamage(r), 1);
       for (const b of this.level.map.objects) if (b.kind === 'barrel_ex' && !b.used && Math.abs(b.x - o.x) <= 1 && Math.abs(b.y - o.y) <= 1) this.breakBarrel(b);

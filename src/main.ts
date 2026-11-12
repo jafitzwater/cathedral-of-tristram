@@ -86,7 +86,7 @@ function fit() {
   inset.l = parseFloat(cs.paddingLeft) || 0; inset.r = parseFloat(cs.paddingRight) || 0; inset.t = parseFloat(cs.paddingTop) || 0; inset.b = parseFloat(cs.paddingBottom) || 0;
   // Order 9: world zoom shows about D1's 640x352 play area (same area, the phone's aspect): on 844x390 that is ~698x323 world px.
   // The HUD and touch controls are drawn in css px, so they keep their size.
-  // Order 10 U3: zoomed out 1.35x from that (between D1 and Diablo Immortal): ~1.35x the tiles across, hero ~70 px on 844x390.
+  // Order 10 U3: zoomed out 1.62x from that (between D1 and Diablo Immortal): the hero is ~72 px tall on 844x390; the HUD keeps its size.
   view.zoom = worldZoom(W, H); view.w = W / view.zoom; view.h = H / view.zoom;
   hud.lay = { W, H, dpr, inset: { ...inset } };
 }
@@ -205,4 +205,4 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, size: () => [W, H, dpr], get art() { return { mib: art.mib, peak: art.peakMib, resident: art.residentKeys(), zone: zones.zone, engaged: zones.engaged, loads: art.loads, releases: art.releases, errors: art.errors }; } }; // read-only handle, only with ?smoke (headless smoke test)
+if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, size: () => [W, H, dpr], frame: (id: string) => art.frame(id), get art() { return { mib: art.mib, peak: art.peakMib, resident: art.residentKeys(), zone: zones.zone, engaged: zones.engaged, loads: art.loads, releases: art.releases, errors: art.errors }; } }; // read-only handle, only with ?smoke (headless smoke test)

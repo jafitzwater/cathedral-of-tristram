@@ -73,6 +73,16 @@ const fake = (fail = ''): Loader => async (url) => { await new Promise((r) => se
   console.log(`loader: peak ${s.peakMib.toFixed(3)} MiB over ${steps.length} zone switches, ${s.loads} loads, ${s.releases} releases`);
 }
 {
+  // Order 10 U5: the wall-brightening pass briefly holds two copies of the walls atlas (+ its pixel buffer): still <= 32 MiB
+  const s = new ArtStore('/', fake()); s.init(m);
+  let passes = 0;
+  s.post.set('tiles/walls-props', (d) => { passes++; return d; });
+  for (const cls of CLASSES) for (const g of [wantedGroups('town', cls), wantedGroups('cathedral', cls), ...ROAMERS.map((r) => wantedGroups('cathedral', cls, r)), wantedGroups('butcher', cls), wantedGroups('town', cls)]) await s.setGroups(g);
+  assert.ok(passes >= 3, 'the pass runs whenever the walls atlas loads');
+  assert.ok(s.peakMib <= BUDGET_MIB, `peak with the wall pass ${s.peakMib.toFixed(3)} MiB`);
+  console.log(`loader: peak with the U5 wall pass ${s.peakMib.toFixed(3)} MiB`);
+}
+{
   // a failed atlas leaves its frames absent (callers draw the fallback silhouette) without breaking the rest
   const s = new ArtStore('/', fake('warrior-town')); s.init(m);
   await s.setGroups(wantedGroups('town', 'warrior'));

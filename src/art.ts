@@ -108,7 +108,7 @@ export let art = new ArtStore('/', browserLoader);
  * frames only (props untouched): +42% light, +15% contrast, warmer stone (red up, blue down), and a lighter rim on each
  * frame's top edge (the top course) and on the vertical edges of corners and columns. Same-size, in place: no bigger atlas.
  */
-export const WALL_LIGHT = 1.42, WALL_CONTRAST = 1.15, WALL_WARM: [number, number, number] = [1.1, 1.0, 0.86], WALL_RIM = 1.45;
+export const WALL_LIGHT = 1.42, WALL_CONTRAST = 1.15, WALL_PIVOT = 0.3, WALL_WARM: [number, number, number] = [1.1, 1.0, 0.86], WALL_RIM = 1.45;
 export interface Rect { x: number; y: number; w: number; h: number; sides: boolean }
 export function wallRects(a: ArtAsset): Rect[] {
   return (a.frames ?? []).filter((f) => /^stone(Wall|Column)/.test(f.id)).map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.h, sides: /Corner|Column/.test(f.id) }));
@@ -126,7 +126,7 @@ export function brightenWalls(px: Uint8ClampedArray, W: number, rects: Rect[]) {
       const i = ((r.y + y) * W + r.x + x) * 4;
       if (px[i + 3] === 0) continue;
       const k = WALL_LIGHT * (rim[y * r.w + x] ? WALL_RIM : 1);
-      for (let c = 0; c < 3; c++) px[i + c] = (((px[i + c] / 255 - 0.5) * WALL_CONTRAST + 0.5) * 255) * k * WALL_WARM[c];
+      for (let c = 0; c < 3; c++) px[i + c] = (((px[i + c] / 255 - WALL_PIVOT) * WALL_CONTRAST + WALL_PIVOT) * 255) * k * WALL_WARM[c];
     }
   }
 }
