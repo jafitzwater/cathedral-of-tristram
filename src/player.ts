@@ -1,4 +1,6 @@
 // Hero model and D1 v1.09 character formulas.
+import { defaultSlots } from './controls';
+import { SPELL_BY_D1 } from './data/spells';
 // Sources: devilution player.cpp (CreatePlayer, NextPlrLevel, ModifyPlrVit/Mag), items.cpp (CalcPlrItemVals, UseItem),
 // missiles.cpp (spell damage), and Jarulf's Guide v1.62 ch. 3-7 (to-hit, block, hit recovery, damage).
 import { CLASSES, EXP_LEVELS, MAX_CLVL, START_GOLD, STAT_POINTS_PER_LEVEL, type ClassId, type Stats } from './data/classes';
@@ -16,6 +18,8 @@ export interface Hero {
   base: Stats; hp: number; mana: number; manaPenalty: number;
   body: Record<BodySlot, Item | null>; inv: InvEntry[]; belt: (Item | null)[]; gold: number;
   spells: Record<string, number>; skill: string; maxDlvl: number;
+  /** Immortal-style skill slots: learned spell ids, 'staff:<id>' or 'scroll:<id>' (null = empty). */
+  slots: (string | null)[];
 }
 
 export function newHero(name: string, cls: ClassId, rng: Rng): Hero {
@@ -24,7 +28,7 @@ export function newHero(name: string, cls: ClassId, rng: Rng): Hero {
     name, cls, clvl: 1, exp: 0, statPts: 0, base: { ...c.base }, hp: 0, mana: 0, manaPenalty: 0,
     body: { head: null, amulet: null, chest: null, handL: null, handR: null, ringL: null, ringR: null },
     inv: [], belt: [null, null, null, null, null, null, null, null], gold: START_GOLD,
-    spells: {}, skill: 'skill', maxDlvl: 0,
+    spells: {}, skill: 'skill', maxDlvl: 0, slots: [null, null, null, null],
   };
   const mk = (idx: number) => { const it = getItemAttrs(rng, idx, 1); it.identified = true; return it; };
   // CreatePlrItems (v1.09): Warrior short sword + buckler (+ club in pack), Rogue short bow, Sorcerer staff of charged bolt; 2 potions in belt.
@@ -32,6 +36,8 @@ export function newHero(name: string, cls: ClassId, rng: Rng): Hero {
   if (cls === 'rogue') { h.body.handL = mk(IDI.ROGUE); h.belt[0] = mk(IDI.HEAL); h.belt[1] = mk(IDI.HEAL); }
   if (cls === 'sorcerer') { h.body.handL = mk(IDI.SORCEROR); h.belt[0] = mk(IDI.MANA); h.belt[1] = mk(IDI.MANA); }
   if (c.startSpell) { h.spells[c.startSpell.spell] = c.startSpell.level; h.skill = c.startSpell.spell; }
+  const staff = h.body.handL?.itype === 'ITYPE_STAFF' ? SPELL_BY_D1[h.body.handL.spell]?.id ?? null : null;
+  h.slots = defaultSlots(cls, h.spells, staff);
   const d = derive(h);
   h.hp = d.maxHp; h.mana = d.maxMana;
   return h;

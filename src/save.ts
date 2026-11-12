@@ -1,3 +1,4 @@
+import { defaultSlots } from './controls';
 // Save / load (localStorage). One save slot per hero, like D1 single player (hero + current game state).
 import { Game, actorAt, type Level, type LevelId, type Mon } from './game';
 import { MONSTERS } from './data/monsters';
@@ -46,7 +47,8 @@ export function serialize(g: Game): SaveData {
 export function deserialize(s: SaveData): Game {
   if (s.v !== SAVE_VERSION) throw new Error(`save version ${s.v} not supported`);
   const g = new Game(s.hero.name, s.hero.cls, 1);
-  g.hero = s.hero; g.l1Seed = s.l1Seed;
+  g.hero = s.hero;
+  if (!Array.isArray(g.hero.slots)) g.hero.slots = defaultSlots(g.hero.cls, g.hero.spells, null); // pre-Order-4 saves g.l1Seed = s.l1Seed;
   g.quests = s.quests; g.stores = s.stores; g.portal = s.portal; g.townDead = new Set(s.townDead);
   setUidSeq(s.uid);
   for (const [id, sl] of Object.entries(s.levels) as [LevelId, SavedLevel][]) {

@@ -37,7 +37,7 @@ for (const goal of [t.down!, TOWN_FROM_CATHEDRAL, ...NPCS.map((n) => ({ x: n.x +
 }
 // a hero can walk from town into the cathedral and back
 const g = new Game('T', 'rogue', 5);
-g.tap({ kind: 'tile', x: t.down!.x, y: t.down!.y });
+g.tap({ kind: 'stairs', x: t.down!.x, y: t.down!.y }); // INTERACT on the cathedral entrance walks there (Order 4: no tap-to-move)
 for (let i = 0; i < 2000 && !g.pendingLevel; i++) g.update(0.05);
 assert.ok(g.pendingLevel); g.finishTravel(); assert.equal(g.cur, 'l1'); assert.equal(g.hero.maxDlvl, 1);
 console.log('levelgen ok');

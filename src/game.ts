@@ -6,6 +6,7 @@ import { BASE, IDI } from './data/items';
 import { NPC_TEXT } from './data/npcs';
 import { findPath } from './path';
 import { DIRS, dirOf, type P } from './iso';
+import { pickTarget, stepFor, rankDirs, interactFor, type Joy, type Interact } from './controls';
 import { Rng } from './rng';
 import { T, WALKABLE, at, setT, type LevelMap, type Obj } from './levels/types';
 import { makeTown, NPCS, TOWN_FROM_CATHEDRAL, TOWN_PORTAL_SPOT, TOWN_START, type NpcDef } from './levels/town';
@@ -35,7 +36,7 @@ export interface Missile { kind: 'firebolt' | 'cbolt' | 'arrow' | 'hbolt' | 'lig
 export interface Level { id: LevelId; dlvl: number; map: LevelMap; explored: Uint8Array; monsters: Mon[]; items: GroundItem[]; corpses: P[] }
 export type Target =
   | { kind: 'mon'; m: Mon } | { kind: 'npc'; npc: NpcDef } | { kind: 'item'; g: GroundItem } | { kind: 'obj'; o: Obj }
-  | { kind: 'door'; x: number; y: number } | { kind: 'tile'; x: number; y: number };
+  | { kind: 'door'; x: number; y: number } | { kind: 'tile'; x: number; y: number } | { kind: 'stairs'; x: number; y: number };
 export interface Stores { smith: Item[]; premium: { items: (Item | null)[]; level: number }; witch: Item[]; healer: Item[]; boy: Item | null; boyLevel: number }
 export interface Float { text: string; x: number; y: number; t: number; color: string }
 export type SfxEvent = string;
@@ -62,6 +63,12 @@ export class Game {
   manaShield = false;
   townDead = new Set<string>(); // NPCs gone (the wounded townsman dies after his message)
   monUid = 1;
+  // ---- Immortal-style input state (set by main.ts every frame) ----
+  move: Joy | null = null;      // joystick vector, screen space
+  attackHeld = false;           // ATTACK button held
+  lockId: number | null = null; // soft-locked monster uid (target ring)
+  lastMoveDir = -1;
+  actTotal = 1;                 // length of the current attack/cast (recovery overlay)
   d!: Derived;
 
   constructor(name: string, cls: ClassId, seed = Date.now() >>> 0) {
@@ -147,11 +154,8 @@ export class Game {
     if (this.dead || this.p.state === 'hit') { if (!this.dead) this.target = t; return; }
     this.dialog = null;
     this.target = t;
-    if (t.kind === 'tile') {
-      const path = this.pathTo({ x: t.x, y: t.y }, false);
-      if (path) this.p.path = path;
-      this.target = null;
-    }
+    if (t.kind === 'tile') this.target = null; // Order 4: no tap-to-move (the joystick moves the hero)
+    if (t.kind === 'mon') this.lockId = t.m.uid;
   }
   pathTo(goal: P, adjacentOk: boolean): P[] | null {
     const m = this.level.map, p = this.p;
@@ -171,9 +175,9 @@ export class Game {
     return best;
   }
   /** Cast the selected skill/spell at a tile (D1 right-click). */
-  castAt(tx: number, ty: number) {
+  castAt(tx: number, ty: number, sel = this.hero.skill) {
     if (this.dead || this.p.state === 'attack' || this.p.state === 'cast' || this.p.state === 'hit') return;
-    const h = this.hero, sel = h.skill;
+    const h = this.hero;
     if (sel === 'skill') { this.classSkill(); return; }
     const src = this.spellSource(sel);
     if (!src) { this.say('You have no way to cast that'); return; }
@@ -187,11 +191,58 @@ export class Game {
       h.mana -= cost;
     } else if (src.from === 'staff') { src.item!.charges--; }
     else { removeItem(h, src.item!); if (h.skill === sel && !this.spellSource(sel)) h.skill = h.spells[s.id] ? s.id : 'skill'; }
+    this.refresh();
     this.p.path = []; this.target = null;
     this.p.dir = dirOf(tx - this.p.tx, ty - this.p.ty) >= 0 ? dirOf(tx - this.p.tx, ty - this.p.ty) : this.p.dir;
-    this.p.state = 'cast'; this.p.t = ATTACK_TICKS[h.cls].cast * TICK;
+    this.p.state = 'cast'; this.p.t = ATTACK_TICKS[h.cls].cast * TICK; this.actTotal = this.p.t;
     this.sfx.push(`cast_${s.type}`);
     this.doSpell(s.id, slvl, tx, ty);
+  }
+  /** Facing in tile space: the stick when it is held, else the hero's facing. */
+  facing(): P { const j = this.move; return j && j.mag > 0 ? DIRS[rankDirs(j.x, j.y)[0].dir] : DIRS[this.p.dir] ?? DIRS[0]; }
+  /** Soft-lock auto-target (nearest visible monster in range, facing-biased; keeps the current lock while valid). */
+  autoTarget(range: number): Mon | null {
+    const p = this.p, here = { x: p.tx, y: p.ty };
+    const live = this.level.monsters.filter((m) => m.alive);
+    const c = pickTarget(p.tx, p.ty, this.facing(), live.map((m) => ({ id: m.uid, x: m.tx, y: m.ty })), this.lockId, range, range + 2, (q) => this.los(here, q));
+    const m = c ? live.find((mm) => mm.uid === c.id) ?? null : null;
+    this.lockId = m ? m.uid : null;
+    return m;
+  }
+  lockedMon(): Mon | null { return this.lockId === null ? null : this.level.monsters.find((m) => m.uid === this.lockId && m.alive) ?? null; }
+  /** Skill slot i (Immortal skill button): auto-aim at the soft target, else straight ahead. */
+  castSlot(i: number) {
+    const id = this.hero.slots[i];
+    if (!id) { this.say('Empty slot: assign a spell in the Spellbook'); return; }
+    this.castId(id);
+  }
+  castId(id: string) {
+    const src = this.spellSource(id);
+    if (!src) { this.say(id.startsWith('scroll:') ? 'No scroll of that kind left' : id.startsWith('staff:') ? 'No charges' : 'You have no way to cast that'); this.sfx.push('nope'); return; }
+    const s = SPELLS[src.spell], p = this.p;
+    let tx = p.tx, ty = p.ty;
+    if (s.targeted) {
+      const m = this.autoTarget(10);
+      if (m) { tx = m.tx; ty = m.ty; } else { const f = this.facing(); tx = p.tx + f.x * 6; ty = p.ty + f.y * 6; }
+    }
+    this.castAt(tx, ty, id);
+  }
+  /** Contextual INTERACT button. */
+  interaction(): Interact | null { return this.dead ? null : interactFor(this); }
+  interact() { const it = this.interaction(); if (it) this.tap(it.target); }
+  autoGold() {
+    const p = this.p;
+    for (const gi of this.level.items) if (gi.item.itype === 'ITYPE_GOLD' && Math.max(Math.abs(gi.x - p.tx), Math.abs(gi.y - p.ty)) <= 1) { this.pickGround(gi); return; }
+  }
+  /** ATTACK held: soft-lock the nearest monster (walk in and hit), else break an adjacent barrel, else swing at the air. */
+  autoAttack() {
+    const p = this.p;
+    if (this.target && this.target.kind === 'mon' && this.target.m.alive && this.target.m.uid === this.lockId) return;
+    const m = this.autoTarget(this.d.bow ? 10 : 4);
+    if (m) { this.target = { kind: 'mon', m }; return; }
+    const b = this.level.map.objects.find((o) => !o.used && (o.kind === 'barrel' || o.kind === 'barrel_ex') && Math.max(Math.abs(o.x - p.tx), Math.abs(o.y - p.ty)) <= 1);
+    if (b) { this.target = { kind: 'obj', o: b }; return; }
+    if (!this.target) { p.path = []; const f = this.facing(), dd = dirOf(f.x, f.y); if (dd >= 0) p.dir = dd; this.startAttack(null); }
   }
   /** Where the selected spell comes from: learned spell, equipped staff charges, or a scroll in pack/belt. */
   spellSource(sel: string): { spell: string; from: 'spell' | 'staff' | 'scroll'; item?: Item } | null {
@@ -281,6 +332,7 @@ export class Game {
         h.spells[s.id] = Math.min(15, (h.spells[s.id] ?? 0) + 1);
         take(); this.say(`You learn ${s.name} (level ${h.spells[s.id]})`); this.sfx.push('book');
         if (h.skill === 'skill') h.skill = s.id;
+        if (!h.slots.includes(s.id) && h.slots.includes(null)) h.slots[h.slots.indexOf(null)] = s.id; // Immortal: new skills drop into a free slot
         return true;
       }
       case 'IMISC_SCROLL': case 'IMISC_SCROLLT': {
@@ -340,6 +392,17 @@ export class Game {
       if (p.t <= 0) { p.state = 'idle'; p.stepT = 0; }
       return;
     }
+    if (p.prog === 0) {
+      this.autoGold();
+      if (this.attackHeld) { this.autoAttack(); if ((p.state as string) === 'attack') return; }
+      else if (this.move && this.move.mag > 0) {
+        this.target = null;
+        const here = { x: p.tx, y: p.ty };
+        const dir = stepFor(this.move, here, (x, y) => this.free(x, y, p) && (x === p.tx || y === p.ty || (this.tileWalk(x, p.ty) && this.tileWalk(p.tx, y))), this.lastMoveDir);
+        if (dir >= 0) { p.path = [{ x: p.tx + DIRS[dir].x, y: p.ty + DIRS[dir].y }]; this.lastMoveDir = dir; }
+        else { p.path = []; const f = this.facing(), dd = dirOf(f.x, f.y); if (dd >= 0) p.dir = dd; }
+      } else this.lastMoveDir = -1;
+    }
     const t = this.target;
     if (t && p.prog === 0) {
       if (this.actOnTarget(t)) return;
@@ -373,13 +436,13 @@ export class Game {
       }
       case 'door': if (near(t)) { p.path = []; this.target = null; this.toggleDoor(t.x, t.y); return true; } go(t, true); return false;
       case 'tile': this.target = null; return false;
+      case 'stairs': if (p.tx === t.x && p.ty === t.y) { this.target = null; this.portalArmed = true; this.onPlayerTile(); return true; } go(t, false); if (!p.path.length) this.target = null; return false;
     }
   }
-  startAttack(m: Mon | Obj) {
+  startAttack(m: Mon | Obj | null) {
     const p = this.p, h = this.hero;
-    const tx = 'def' in m ? m.tx : m.x, ty = 'def' in m ? m.ty : m.y;
-    const dd = dirOf(tx - p.tx, ty - p.ty); if (dd >= 0) p.dir = dd;
-    p.state = 'attack'; p.t = ATTACK_TICKS[h.cls][this.d.bow ? 'bow' : 'melee'] * TICK; p.stepT = 0;
+    if (m) { const tx = 'def' in m ? m.tx : m.x, ty = 'def' in m ? m.ty : m.y; const dd = dirOf(tx - p.tx, ty - p.ty); if (dd >= 0) p.dir = dd; }
+    p.state = 'attack'; p.t = ATTACK_TICKS[h.cls][this.d.bow ? 'bow' : 'melee'] * TICK; p.stepT = 0; this.actTotal = p.t;
     this.attackTarget = m;
     this.sfx.push(this.d.bow ? 'bow' : 'swing');
   }
