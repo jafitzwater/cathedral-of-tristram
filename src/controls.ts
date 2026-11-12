@@ -192,7 +192,7 @@ export function interactFor(g: Game): Interact | null {
   for (const n of g.npcs()) if (cheb(n) <= R) opts.push({ d: cheb(n), pri: 1, it: { target: { kind: 'npc', npc: n }, label: `Talk to ${n.name.split(' ')[0]}` } });
   for (const o of m.objects) {
     if (o.used || cheb(o) > R || o.kind === 'body' || o.kind === 'well' || o.kind === 'cross' || o.kind === 'portal') continue;
-    const label = o.kind.startsWith('chest') ? 'Open chest' : o.kind === 'sarc' ? 'Open sarcophagus' : o.kind === 'shrine' ? 'Use shrine' : o.kind.startsWith('barrel') ? 'Break barrel' : 'Use';
+    const label = o.kind.startsWith('chest') ? 'Open chest' : o.kind === 'sarc' ? 'Open sarcophagus' : o.kind === 'shrine' ? 'Use shrine' : o.kind.startsWith('barrel') ? 'Break barrel' : o.kind === 'sealed' ? (o.var1 === 12 ? 'Catacombs (sealed)' : o.var1 === 3 ? 'Hell (sealed)' : 'Caves (sealed)') : 'Use';
     opts.push({ d: cheb(o), pri: 2, it: { target: { kind: 'obj', o }, label } });
   }
   for (let y = here.y - R; y <= here.y + R; y++) for (let x = here.x - R; x <= here.x + R; x++) {

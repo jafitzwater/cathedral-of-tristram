@@ -10,7 +10,7 @@ import { DIRS, dirOf, type P } from './iso';
 import { pickTarget, stickDir, faceToward, moveCircle, screenToWorldDir, HERO_RADIUS, MON_RADIUS, interactFor, type Joy, type Interact } from './controls';
 import { Rng } from './rng';
 import { T, WALKABLE, at, setT, type LevelMap, type Obj } from './levels/types';
-import { makeTown, NPCS, TOWN_FROM_CATHEDRAL, TOWN_PORTAL_SPOT, TOWN_START, type NpcDef } from './levels/town';
+import { makeTown, NPCS, SEALED, TOWN_FROM_CATHEDRAL, TOWN_PORTAL_SPOT, TOWN_START, type NpcDef } from './levels/town';
 import { generateL1 } from './levels/cathedral';
 import {
   type Item, getItemAttrs, goldItem, makeDrop, rndAllItems, rndMonsterItem, rndUseful, butcherCleaver,
@@ -56,7 +56,7 @@ export class Game {
   target: Target | null = null;
   quests = { butcher: 'inactive' as 'inactive' | 'active' | 'done' };
   stores!: Stores;
-  portal: { x: number; y: number } | null = null; // dungeon-side town portal
+  portal: { x: number; y: number; fx?: number; fy?: number } | null = null; // dungeon-side town portal (fx/fy: the exact cast spot)
   l1Seed: number;
   msg = ''; msgT = 0; msgSub = '';
   floats: Float[] = [];
@@ -65,7 +65,7 @@ export class Game {
   dialog: { npc: NpcDef; text: string } | null = null;
   speech: { text: string; t: number } | null = null;
   dead = false;
-  pendingLevel: { to: LevelId; at: P } | null = null;
+  pendingLevel: { to: LevelId; at: P; exact?: P } | null = null;
   manaShield = false;
   townDead = new Set<string>(); // NPCs gone (the wounded townsman dies after his message)
   monUid = 1;
@@ -314,7 +314,7 @@ export class Game {
   }
   openPortal() {
     if (this.cur === 'town') { this.say('You cannot cast that in town'); return; }
-    this.portal = { x: this.p.tx, y: this.p.ty };
+    this.portal = { x: this.p.tx, y: this.p.ty, fx: this.p.x, fy: this.p.y };
     this.say('A town portal opens');
     this.sfx.push('portal');
   }
@@ -580,7 +580,10 @@ export class Game {
     // town portal
     if (this.portal) {
       if (this.cur === 'l1' && p.tx === this.portal.x && p.ty === this.portal.y && this.portalArmed) { this.travel('town', { x: TOWN_PORTAL_SPOT.x, y: TOWN_PORTAL_SPOT.y + 1 }); return; }
-      if (this.cur === 'town' && p.tx === TOWN_PORTAL_SPOT.x && p.ty === TOWN_PORTAL_SPOT.y) { const back = { x: this.portal.x, y: this.portal.y + 1 }; this.portal = null; this.travel('l1', back); return; }
+      if (this.cur === 'town' && p.tx === TOWN_PORTAL_SPOT.x && p.ty === TOWN_PORTAL_SPOT.y) {
+        // Order 12: back to the exact spot it was cast, and the portal closes (both ends)
+        const pt = this.portal; this.portal = null; this.travel('l1', { x: pt.x, y: pt.y }); this.pendingLevel!.exact = pt.fx === undefined ? undefined : { x: pt.fx, y: pt.fy! }; return;
+      }
     }
     this.portalArmed = true;
   }
@@ -600,6 +603,7 @@ export class Game {
     const spot = pl.at.x >= 0 ? pl.at : lv.map.start;
     const s = this.nearestFree(spot);
     this.p = actorAt(s.x, s.y);
+    if (pl.exact && s.x === spot.x && s.y === spot.y && Math.round(pl.exact.x) === s.x && Math.round(pl.exact.y) === s.y) { this.p.x = pl.exact.x; this.p.y = pl.exact.y; }
     this.target = null; this.missiles = []; this.dialog = null;
     if (pl.to === 'l1') { this.hero.maxDlvl = Math.max(this.hero.maxDlvl, 1); this.portalArmed = !(this.portal && s.x === this.portal.x && s.y === this.portal.y); }
     if (pl.to === 'town' && from !== 'town') this.restock();
@@ -682,6 +686,7 @@ export class Game {
       }
       case 'shrine': o.used = true; this.shrine(o.shrine ?? 'Mysterious', r); break;
       case 'barrel': case 'barrel_ex': this.breakBarrel(o); break;
+      case 'sealed': this.say(`The way into ${SEALED[o.var1] ?? 'the depths'} is sealed`, 2); break; // Order 12: decorative, closed
       default: break;
     }
     this.refresh();
