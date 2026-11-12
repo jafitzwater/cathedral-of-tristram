@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Cathedral of Tristram</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+    body { display: flex; align-items: center; justify-content: center; }
+    canvas { image-rendering: pixelated; display: block; }
+    #rotate { display: none; position: fixed; inset: 0; background: #000; color: #d8c89a; font: 20px serif; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+    @media (orientation: portrait) { #rotate { display: flex; } #view { display: none; } }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="rotate">Rotate your device to landscape to play.</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
