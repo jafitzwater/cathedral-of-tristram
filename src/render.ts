@@ -3,7 +3,7 @@
 import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './iso';
 import type { NpcDef } from './levels/town';
 import { T, TALL, at } from './levels/types';
-import { BUILDINGS, TAVERN_LIGHT, TOWN_PORTAL_SPOT, inBrush, type Building, type Dress } from './levels/town';
+import { BUILDINGS, TAVERN_LIGHT, TOWN_PORTAL_SPOT, cowArt, inBrush, type Building, type Dress } from './levels/town';
 import { buildingFade, frontS, sortKey, type SpriteBox } from './townArt';
 import { art, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
 import { WALL_PX, plainAbove, roomAt, stackPieces, wallData, wallFade } from './walls';
@@ -36,6 +36,7 @@ export let lastSprites: Sprite[] = [];
 export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   const lv = g.level, m = lv.map, cam = camera(g);
   const town = lv.id === 'town';
+  if (town) cowArt.ready = !!art.anim('cow', 'idle') && hasFrame('cow:idle:s:0');
   c.fillStyle = '#000'; c.fillRect(0, 0, view.w, view.h);
   c.save(); c.beginPath(); c.rect(0, 0, view.w, view.h); c.clip();
   const sprites: Sprite[] = [];
@@ -45,7 +46,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   const pd = g.p.x + g.p.y;
   const lightAt = (x: number, y: number) => town ? 1 : Math.max(0, 1 - Math.hypot(x - g.p.x, y - g.p.y) / (LIGHT_R + g.d.light));
   const vis = (x: number, y: number) => town || (lv.explored[Math.round(y) * m.w + Math.round(x)] && lightAt(x, y) > 0.05);
-  for (const o of m.objects) if (vis(o.x, o.y)) ents.push({ s: o.x + o.y, x: o.x, y: o.y, draw: () => drawObj(c, g, o, cam, sprites, lightAt(o.x, o.y)) });
+  for (const o of m.objects) if (vis(o.x, o.y)) ents.push({ s: o.x + o.y, x: o.x, y: o.y, draw: () => drawObj(c, g, o, cam, sprites, lightAt(o.x, o.y), time) });
   if (g.portal) {
     const pp = town ? TOWN_PORTAL_SPOT : g.portal;
     if (vis(pp.x, pp.y)) ents.push({ s: pp.x + pp.y, x: pp.x, y: pp.y, draw: () => drawPortal(c, pp, cam, time) });
@@ -285,7 +286,7 @@ function drawNpc(c: CanvasRenderingContext2D, g: Game, n: NpcDef, cam: P, sprite
   }
   const talking = g.dialog?.npc === n, h = heightOf(n.id, 96);
   // D1 town NPCs face the hero while talking, otherwise they keep their post's facing (south)
-  const dir = talking || Math.max(Math.abs(g.p.x - n.x), Math.abs(g.p.y - n.y)) <= 3 ? Math.max(0, dirOf(Math.round(g.p.x) - n.x, Math.round(g.p.y) - n.y)) : 0;
+  const dir = talking || Math.max(Math.abs(g.p.x - n.x), Math.abs(g.p.y - n.y)) <= 3 ? Math.max(0, dirOf(Math.round(g.p.x) - n.x, Math.round(g.p.y) - n.y)) : n.face ? Math.max(0, dirOf(n.face.x, n.face.y)) : 0;
   const ms = time * 1000 + (n.x * 37 + n.y * 11) * 10;
   shadow(c, x, y, h);
   if (!drawActor(c, n.id, talking ? 'talk' : 'idle', dir, ms, x, y)) silhouette(c, x, y, h);
@@ -316,9 +317,13 @@ function drawMon(c: CanvasRenderingContext2D, g: Game, mo: Game['level']['monste
   const bw = Math.max(32, h * 0.5);
   sprites.push({ t: { kind: 'mon', m: mo }, x: x - bw / 2, y: y - h - 4, w: bw, h: h + 8, depth: mo.x + mo.y + 1 });
 }
-function drawObj(c: CanvasRenderingContext2D, g: Game, o: Game['level']['map']['objects'][number], cam: P, sprites: Sprite[], lit: number) {
+function drawObj(c: CanvasRenderingContext2D, g: Game, o: Game['level']['map']['objects'][number], cam: P, sprites: Sprite[], lit: number, time: number) {
   const p = tileToScreen(o.x, o.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
   c.globalAlpha = g.level.id === 'town' ? 1 : Math.max(0.3, lit);
+  if (o.kind === 'cow') { // Order 13: drawn only with the Order 11b cow art; nothing at all until it lands
+    if (drawActor(c, 'cow', 'idle', o.var1, time * 1000 + o.x * 397 + o.y * 131, x, y)) sprites.push({ t: { kind: 'obj', o }, x: x - 40, y: y - 60, w: 80, h: 66, depth: o.x + o.y });
+    c.globalAlpha = 1; return;
+  }
   const objArt = o.kind === 'barrel' || o.kind === 'barrel_ex' ? (o.used ? '' : 'barrel_s') : o.kind.startsWith('chest') ? (o.used ? 'chestOpen_s' : 'chestClosed_s') : '';
   if (!(objArt && drawFrame(c, objArt, x, y + 2, o.kind === 'chest3' ? 1.25 : 1))) {
     switch (o.kind) {

@@ -24,7 +24,7 @@ export function wantedGroups(zone: Zone, cls: string | null, engaged: string | n
   const g = ['shared'];
   if (zone === 'menu' || !cls) return g;
   g.push(`hero-${cls}-town`);
-  if (zone === 'town') g.push('town-tiles', 'town-buildings', 'town-npcs');
+  if (zone === 'town') g.push('town-tiles', 'town-buildings', 'town-npcs', 'town-cow'); // Order 13: town-cow is empty until the Order 11b cow lands
   else {
     g.push('dungeon-tiles', `hero-${cls}-combat`);
     if (zone === 'butcher') g.push('butcher');

@@ -686,6 +686,7 @@ export class Game {
       }
       case 'shrine': o.used = true; this.shrine(o.shrine ?? 'Mysterious', r); break;
       case 'barrel': case 'barrel_ex': this.breakBarrel(o); break;
+      case 'cow': this.say('Cow', 1.5); break; // D1's flavour line, no interaction
       case 'sealed': this.say(`The way into ${SEALED[o.var1] ?? 'the depths'} is sealed`, 2); break; // Order 12: decorative, closed
       default: break;
     }

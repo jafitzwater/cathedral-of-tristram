@@ -2,8 +2,9 @@
 // joystick, roof fade, depth, the Town Portal round trip, old-save relocation and the town memory budget.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { BUILDINGS, BUILDING_FP, CATHEDRAL_DOOR, CATHEDRAL_SCALE, EAST_BRANCH, EAST_STREAM, GRAVEYARD, HOUSE_SCALE, NPCS, POINTS, TOWN_FROM_CATHEDRAL, TOWN_H, TOWN_PORTAL_SPOT, TOWN_START, TOWN_W, WEST_STREAM, footprintTiles, makeTown, streamX } from '../src/levels/town';
+import { COWS, SQUARE, cowArt, BUILDINGS, BUILDING_FP, CATHEDRAL_DOOR, CATHEDRAL_SCALE, EAST_BRANCH, EAST_STREAM, GRAVEYARD, HOUSE_SCALE, NPCS, POINTS, TOWN_FROM_CATHEDRAL, TOWN_H, TOWN_PORTAL_SPOT, TOWN_START, TOWN_W, WEST_STREAM, footprintTiles, makeTown, streamX } from '../src/levels/town';
 import { T, WALKABLE, at } from '../src/levels/types';
+import { tileToScreen } from '../src/iso';
 import { findPath } from '../src/path';
 import { BASE_FADE, ROOF_FADE, behind, buildingFade, frontS, sortKey, spriteRect, type SpriteBox } from '../src/townArt';
 import { groupsMiB, wantedGroups, BUDGET_MIB, type ArtManifest } from '../src/art';
@@ -28,8 +29,11 @@ const sq = { x: 58.5, y: 70 }; // the square's centre
 for (const p of POINTS) assert.ok(p.x > 2 && p.y > 2 && p.x < 93 && p.y < 93, `${p.id} inside the woods ring`);
 for (const id of ['pepin', 'cain', 'griswold', 'ogden', 'farnham', 'gillian', 'wirt', 'adria', 'wounded']) assert.deepEqual({ x: NPCS.find((n) => n.id === id)!.x, y: NPCS.find((n) => n.id === id)!.y }, { x: pt(id).x, y: pt(id).y }, `${id} at its point`);
 assert.equal(at(t, pt('cain').x, pt('cain').y), T.FLOOR, '5 Cain on the square');
-assert.ok(Math.abs(TOWN_START.x - pt('cain').x) <= 4 && Math.abs(TOWN_START.y - pt('cain').y) <= 5 && at(t, TOWN_START.x, TOWN_START.y) === T.FLOOR, 'spawn on the square');
-assert.ok(north(B('tavern'), TOWN_START) && Math.hypot(TOWN_START.x - B('tavern').x, TOWN_START.y - B('tavern').y) < 14, 'spawn just south of the tavern (D1)');
+// Order 13: new characters start just south of the smithy, on the cobbled path, in front of it
+{ const sm0 = B('smithy'), sx = TOWN_START.x - sm0.x, sy = TOWN_START.y - sm0.y;
+  assert.equal(at(t, TOWN_START.x, TOWN_START.y), T.PATH, 'spawn on the cobbles');
+  assert.ok(sx + sy > (sm0.ex + sm0.ey) / 2 && sx + sy < (sm0.ex + sm0.ey) / 2 + 6 && Math.abs(sx - sy) <= 4, `spawn just south of the smithy (${sx},${sy})`);
+  assert.ok(TOWN_START.x + TOWN_START.y > frontS(sm0), 'spawn in front of the smithy, not hidden by it'); }
 assert.ok(east(sq, B('pepin')) && Math.abs((B('pepin').x + B('pepin').y) - (sq.x + sq.y)) < 6, '4 Pepin on the west edge of the square');
 assert.ok(east(B('smithy'), sq), '6 smithy on the east edge of the square');
 assert.ok(north(B('tavern'), sq), '8 tavern north of the square');
@@ -63,6 +67,7 @@ assert.equal(cat.s, CATHEDRAL_SCALE);
 // ---- footprints ----
 for (const [id, fp] of Object.entries(BUILDING_FP)) {
   const f = atlas.frames!.find((q) => q.id === `${id}_full`)!;
+  if (id === 'smithy_eave') { assert.ok(!f, 'eave art not landed yet: slot only'); continue; }
   assert.deepEqual(fp, [f.fp_m![1], f.fp_m![0]], `${id} footprint = footprint_m`);
   assert.ok((fp[0] + fp[1]) * 32 <= f.w * 1.1, `${id}: ground fits sprite`);
 }
@@ -178,10 +183,42 @@ for (const b of BUILDINGS.filter((q) => ['smithy', 'pepin_house', 'tavern', 'adr
   assert.equal(buildingFade(b, F(b), x, y).roof, ROOF_FADE, `${b.role} roof fades with the hero at ${x},${y}`);
   const r = spriteRect(b, F(b)); assert.ok(r.eavesY > r.y0 && r.eavesY < r.y1, `${b.role} eaves inside sprite`);
 }
-const pcs = BUILDINGS.map((b) => ({ b, f: F(b) }));
+const pcs = BUILDINGS.filter((b) => b.id !== 'smithy_eave').map((b) => ({ b, f: F(b) }));
 const gr = pt('griswold');
 assert.ok(sortKey(gr.x + gr.y, gr.x, gr.y, pcs) >= gr.x + gr.y && (gr.x + gr.y < frontS(sm) ? sortKey(gr.x + gr.y, gr.x, gr.y, pcs) > frontS(sm) : true), 'Griswold drawn over the smithy');
 assert.ok(sortKey(sm.x - 4 + sm.y, sm.x - 4, sm.y, pcs) < frontS(sm), 'behind stays behind');
+
+// ---- Order 13: the open square — packed dirt, no footprint on it, no building sprite standing in front of its middle ----
+for (let y = SQUARE.y0; y <= SQUARE.y1; y++) for (let x = SQUARE.x0; x <= SQUARE.x1; x++) assert.ok(([T.FLOOR, T.HOUSE] as number[]).includes(at(t, x, y)) && (at(t, x, y) === T.FLOOR || footprintTiles(B('well')).some((q) => q.x === x && q.y === y)), `square ${x},${y} open`);
+const mid = { x: (SQUARE.x0 + SQUARE.x1) / 2, y: (SQUARE.y0 + SQUARE.y1) / 2 };
+assert.ok(Math.hypot(pt('cain').x - mid.x, pt('cain').y - mid.y) <= 2.5 && Math.hypot(B('well').x - mid.x, B('well').y - mid.y) <= 2.5, 'Cain and the well in the middle');
+for (let y = Math.ceil(mid.y - 3); y <= mid.y + 3; y++) for (let x = Math.ceil(mid.x - 3); x <= mid.x + 3; x++) for (const pc of pcs) {
+  if (pc.b.id === 'well' || pc.b.id === 'fence' || x + y >= frontS(pc.b)) continue; // only pieces drawn over (in front of) the tile matter
+  const r = spriteRect(pc.b, pc.f), q = tileToScreen(x, y), fx = q.x, fy = q.y + 16;
+  assert.ok(!(fx > r.x0 + 8 && fx < r.x1 - 8 && fy - 40 > r.y0 && fy - 40 < r.y1), `${pc.b.role} sprite covers the square at ${x},${y}`);
+}
+for (const id of ['tavern', 'pepin', 'smithy']) { const b = B(id), d = Math.hypot(b.x - mid.x, b.y - mid.y); assert.ok(d > 5 && d < 17, `${id} borders the square (${d.toFixed(1)})`); }
+assert.ok(east(B('smithy'), mid) && B('smithy').x + B('smithy').y > mid.x + mid.y - 4, 'smithy off the square\'s SE edge');
+assert.ok(B('farnham_house').x + B('farnham_house').y > mid.x + mid.y + 15, 'Farnham\'s house south, off the square');
+// ---- Order 13: Griswold under the eave facing the square; smithy collision; the eave is an art slot ----
+const smi = B('smithy'), eave = B('smithy_eave'), gw = NPCS.find((n) => n.id === 'griswold')!;
+assert.ok(eave && eave.solid === 'none' && eave.art === 'smithy_eave_full', 'eave layout slot');
+assert.ok(Math.abs(gw.x - eave.x) <= eave.ex / 2 && Math.abs(gw.y - eave.y) <= eave.ey / 2 + 0.6, 'Griswold under / in front of the eave');
+assert.ok(gw.y > smi.y + smi.ey / 2 && gw.x >= smi.x - smi.ex / 2 && gw.face && gw.face.x < 0, 'Griswold in front of the smithy\'s visible face, facing the square');
+for (const q of footprintTiles(smi)) assert.ok(!g.tileWalk(q.x, q.y), 'smithy blocks');
+assert.ok(g.tileWalk(gw.x - 1, gw.y), 'Griswold approachable from the square');
+// ---- Order 13: three cows east of the catacombs (12): collision now, drawn / tappable only once the cow art lands ----
+const cat12 = pt('catacombs'), cows = t.objects.filter((o) => o.kind === 'cow');
+assert.equal(cows.length, 3); assert.deepEqual(cows.map((o) => ({ x: o.x, y: o.y })), COWS.map((c) => ({ x: c.x, y: c.y })));
+for (const o of cows) { assert.ok(east(o, cat12) && Math.hypot(o.x - cat12.x, o.y - cat12.y) < 9, 'cow just east of 12'); assert.ok(!g.tileWalk(o.x, o.y), 'cow blocks'); assert.ok(reach(o), 'cow reachable'); }
+assert.ok(wantedGroups('town', 'warrior').includes('town-cow'), 'the town loads the cow group');
+assert.ok(!man.anims.cow, 'no cow art yet (Order 11b)');
+const cg = new Game('C', 'warrior', 5);
+Object.assign(cg.p, { x: cows[0].x - 1, y: cows[0].y + 1, tx: cows[0].x - 1, ty: cows[0].y + 1 });
+cowArt.ready = false; assert.notEqual(cg.interaction()?.label, 'Cow', 'no cow interaction while the art is missing');
+cowArt.ready = true; const ci = cg.interaction(); assert.equal(ci?.label, 'Cow', 'tap line "Cow" once drawn');
+cg.interact(); for (let i = 0; i < 10; i++) cg.update(0.05); assert.equal(cg.msg, 'Cow');
+cowArt.ready = false;
 
 // ---- memory ----
 const town: Record<string, number> = {};

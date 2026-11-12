@@ -3,7 +3,7 @@
 import { DIRS, tileToScreen, type P } from './iso';
 import { T, at } from './levels/types';
 import type { Game, Target } from './game';
-import { TOWN_PORTAL_SPOT } from './levels/town';
+import { TOWN_PORTAL_SPOT, cowArt } from './levels/town';
 
 export const JOY_RADIUS = 56;     // css px: knob travel
 export const JOY_DEADZONE = 0.22; // fraction of radius
@@ -191,8 +191,8 @@ export function interactFor(g: Game): Interact | null {
   for (const gi of lv.items) if (gi.item.itype !== 'ITYPE_GOLD' && cheb(gi) <= R) opts.push({ d: cheb(gi), pri: 0, it: { target: { kind: 'item', g: gi }, label: `Pick up ${gi.item.identified ? gi.item.iname : gi.item.name}` } });
   for (const n of g.npcs()) if (cheb(n) <= R) opts.push({ d: cheb(n), pri: 1, it: { target: { kind: 'npc', npc: n }, label: `Talk to ${n.name.split(' ')[0]}` } });
   for (const o of m.objects) {
-    if (o.used || cheb(o) > R || o.kind === 'body' || o.kind === 'well' || o.kind === 'cross' || o.kind === 'portal') continue;
-    const label = o.kind.startsWith('chest') ? 'Open chest' : o.kind === 'sarc' ? 'Open sarcophagus' : o.kind === 'shrine' ? 'Use shrine' : o.kind.startsWith('barrel') ? 'Break barrel' : o.kind === 'sealed' ? (o.var1 === 12 ? 'Catacombs (sealed)' : o.var1 === 3 ? 'Hell (sealed)' : 'Caves (sealed)') : 'Use';
+    if (o.used || cheb(o) > R || o.kind === 'body' || o.kind === 'well' || o.kind === 'cross' || o.kind === 'portal' || (o.kind === 'cow' && !cowArt.ready)) continue;
+    const label = o.kind.startsWith('chest') ? 'Open chest' : o.kind === 'sarc' ? 'Open sarcophagus' : o.kind === 'shrine' ? 'Use shrine' : o.kind.startsWith('barrel') ? 'Break barrel' : o.kind === 'cow' ? 'Cow' : o.kind === 'sealed' ? (o.var1 === 12 ? 'Catacombs (sealed)' : o.var1 === 3 ? 'Hell (sealed)' : 'Caves (sealed)') : 'Use';
     opts.push({ d: cheb(o), pri: 2, it: { target: { kind: 'obj', o }, label } });
   }
   for (let y = here.y - R; y <= here.y + R; y++) for (let x = here.x - R; x <= here.x + R; x++) {

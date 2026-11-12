@@ -6,7 +6,7 @@
 // each piece's scaled ground footprint, trees and brush block their tile, the streams block except at the bridges.
 import { T, setT, type LevelMap, type Obj } from './types';
 
-export interface NpcDef { id: string; name: string; x: number; y: number; color: string }
+export interface NpcDef { id: string; name: string; x: number; y: number; color: string; face?: { x: number; y: number } }
 export const TOWN_W = 96, TOWN_H = 96;
 
 /**
@@ -15,7 +15,7 @@ export const TOWN_W = 96, TOWN_H = 96;
  */
 export const BUILDING_FP: Record<string, [number, number]> = {
   smithy: [3.283, 4.63], pepin_house: [3.933, 2.553], tavern: [5.088, 4.633], adria_hut: [3.1, 3.1], cathedral: [5.284, 4.543],
-  well: [1.706, 1.133], fence: [0.08, 0.76], bridge: [3.0, 1.5], tree_a: [2.4, 2.283], tree_b: [2.1, 1.997],
+  smithy_eave: [2.2, 4.6], well: [1.706, 1.133], fence: [0.08, 0.76], bridge: [3.0, 1.5], tree_a: [2.4, 2.283], tree_b: [2.1, 1.997],
 };
 export type Solid = 'footprint' | 'trunk' | 'none';
 /** A placed piece. `id` is the art piece, `role` what it is in this town (several houses reuse one sprite). */
@@ -24,7 +24,7 @@ export const HOUSE_SCALE = 1.35, CATHEDRAL_SCALE = 1.6;
 const piece = (id: string, role: string, x: number, y: number, flip = false, s = HOUSE_SCALE): Building => {
   const [fx, fy] = BUILDING_FP[id];
   const [ex, ey] = flip ? [fy * s, fx * s] : [fx * s, fy * s];
-  return { id, role, art: `${id}_full`, x, y, ex, ey, flip, s, solid: id.startsWith('tree') ? 'trunk' : id === 'bridge' ? 'none' : 'footprint' };
+  return { id, role, art: `${id}_full`, x, y, ex, ey, flip, s, solid: id.startsWith('tree') ? 'trunk' : id === 'bridge' || id === 'smithy_eave' ? 'none' : 'footprint' };
 };
 
 /** The 14 points of Joseph's map legend, in engine tiles (where the NPC stands / the entrance is). */
@@ -34,10 +34,10 @@ export const POINTS: { n: number; id: string; label: string; x: number; y: numbe
   { n: 3, id: 'hell', label: 'Entry: Hell', x: 41, y: 80 },
   { n: 4, id: 'pepin', label: 'Pepin', x: 53, y: 77 },
   { n: 5, id: 'cain', label: 'Cain', x: 58, y: 70 },
-  { n: 6, id: 'griswold', label: 'Griswold', x: 61, y: 63 },
+  { n: 6, id: 'griswold', label: 'Griswold', x: 68, y: 69 }, // Order 13: under the smithy eave, facing the square
   { n: 7, id: 'gillian', label: 'Gillian', x: 40, y: 65 },
   { n: 8, id: 'ogden', label: 'Ogden', x: 53, y: 62 },
-  { n: 9, id: 'farnham', label: 'Farnham', x: 69, y: 81 },
+  { n: 9, id: 'farnham', label: 'Farnham', x: 72, y: 86 }, // Order 13: by his house, moved off the square
   { n: 10, id: 'portal', label: 'Town Portal', x: 58, y: 42 },
   { n: 11, id: 'adria', label: 'Adria', x: 78, y: 22 },
   { n: 12, id: 'catacombs', label: 'Entry: Catacombs', x: 46, y: 22 },
@@ -59,16 +59,19 @@ export function streamX(poly: [number, number][], y: number): number {
 export const BUILDINGS: Building[] = [
   piece('cathedral', 'cathedral', 22, 24, true, CATHEDRAL_SCALE), // flipped: the door (the sprite's gable face) opens south-west
   piece('tavern', 'tavern', 48, 57),                       // 8 Ogden's Rising Sun, north of the square
-  piece('smithy', 'smithy', 62.4, 58.2),                   // 6 east edge of the square, anvil (+y face) toward it
+  // Order 13: the smithy moved south-east to the square's SE edge (where the map draws it). Mirrored, its anvil is on the +x side
+  // face (the side, away from the door) and its +y face, the visible one toward the square, carries the eave slot below
+  piece('smithy', 'smithy', 69, 65.5, true),
+  piece('smithy_eave', 'smithy_eave', 69, 69.2, true),      // Order 11b art slot: renders only once `smithy_eave_full` exists
   piece('pepin_house', 'pepin', 48.6, 75.2),               // 4 west edge of the square
   piece('pepin_house', 'gillian_house', 36.6, 63.1, true), // 7 north-west of the tavern
-  piece('pepin_house', 'farnham_house', 65.8, 77.4, true), // 9 the southern house
+  piece('pepin_house', 'farnham_house', 68.5, 87, true),   // 9 the southern house (Order 13: moved S/SE, then nudged SW, off the square)
   piece('pepin_house', 'north_house', 47.5, 43.3),         // the house north of the tavern
   piece('adria_hut', 'nw_house', 25.6, 49.4),
-  piece('smithy', 'se_house', 67, 67.3, true),
+  piece('pepin_house', 'ne_house', 62.4, 57.5, true),      // Order 13: the house NE of the square (was the smithy's spot)
   piece('adria_hut', 'adria', 75, 18.4),                   // 11 across the east stream
   piece('adria_hut', 'catacombs', 46.4, 19.7, false, 1),   // 12 the catacombs hut (closed)
-  piece('well', 'well', 61, 73),
+  piece('well', 'well', 60, 68),                           // Order 13: in the middle of the open square, by Cain
   piece('bridge', 'bridge_west', 18, 50),                  // to Wirt
   piece('bridge', 'bridge_east', 71, 25),                  // to Adria
   piece('bridge', 'bridge_road', 82, 70.5),                // the south-east road
@@ -93,7 +96,7 @@ export function footprintTiles(b: Building): { x: number; y: number }[] {
 }
 
 export const NPCS: NpcDef[] = [
-  { id: 'griswold', name: 'Griswold the Blacksmith', x: P('griswold').x, y: P('griswold').y, color: '#a0603a' },
+  { id: 'griswold', name: 'Griswold the Blacksmith', x: P('griswold').x, y: P('griswold').y, color: '#a0603a', face: { x: -1, y: 1 } }, // toward the square
   { id: 'pepin', name: 'Pepin the Healer', x: P('pepin').x, y: P('pepin').y, color: '#e0e0c0' },
   { id: 'adria', name: 'Adria the Witch', x: P('adria').x, y: P('adria').y, color: '#7a3aa0' },
   { id: 'cain', name: 'Deckard Cain', x: P('cain').x, y: P('cain').y, color: '#8080c0' },
@@ -104,10 +107,19 @@ export const NPCS: NpcDef[] = [
   { id: 'wounded', name: 'Wounded Townsman', x: P('wounded').x, y: P('wounded').y, color: '#a03030' },
 ];
 export const CATHEDRAL_DOOR = { x: P('church').x, y: P('church').y }; // down stairs at the cathedral's arched door
-export const TOWN_START = { x: 56, y: 66 };              // D1 spawn: on the square, south of the tavern
+export const TOWN_START = { x: 72, y: 71 };              // Order 13: new characters start just south of the smithy, on the cobbles
 export const TOWN_FROM_CATHEDRAL = { x: 22, y: 31 };     // arriving back up the cathedral stairs
 export const TOWN_PORTAL_SPOT = { x: P('portal').x, y: P('portal').y }; // point 10: where a dungeon-cast Town Portal opens in town
 export const TAVERN_LIGHT = { x: 52, y: 61 };            // Ogden's lit entrance
+/** Order 13: the open square (packed dirt) between the tavern (8), Pepin (4) and the smithy (6). */
+export const SQUARE = { x0: 53, y0: 63, x1: 64, y1: 75 };
+/**
+ * Order 13: three D1 cows just east of the catacombs hut (12). They block their tiles now; they are drawn (and tappable, "Cow")
+ * only once the Sprite Director's cow art is in the manifest: anims.cow (action `idle`, 8 facings), frames `cow:idle:<dir>:<i>`,
+ * asset in group `town-cow` (loaded with the town) or any town group. Until then nothing is drawn, no stand-in.
+ */
+export const COWS: { x: number; y: number; dir: number }[] = [{ x: 51, y: 19, dir: 1 }, { x: 53, y: 21, dir: 6 }, { x: 52, y: 16, dir: 3 }];
+export const cowArt = { ready: false }; // set each frame by the renderer when the cow frames are resident
 /** The closed entrances (decorative; later dungeons): obj var1 = their map number. */
 export const SEALED: Record<number, string> = { 2: 'the Caves', 3: 'Hell', 12: 'the Catacombs' };
 
@@ -115,8 +127,8 @@ export const SEALED: Record<number, string> = { 2: 'the Caves', 3: 'Hell', 12: '
 export const PATHS: [number, number][][] = [
   [[53, 63], [56, 66]],                                  // tavern door - square
   [[54, 74], [52, 78]],                                  // square - Pepin
-  [[60, 64], [61, 62]],                                  // square - Griswold's anvil
-  [[62, 75], [68, 80]],                                  // square - Farnham
+  [[64, 69], [67, 69]],                                  // square - Griswold under the eave
+  [[62, 75], [66, 79], [71, 85]],                        // square - Farnham
   [[53, 62], [41, 63], [40, 66]],                        // tavern - Gillian
   [[53, 62], [53, 50], [42, 46], [27, 40], [25, 36], [22, 31]], // square - slain townsman - cathedral door
   [[50, 47], [49, 46]],                                  // north house
@@ -173,7 +185,7 @@ export function makeTown(): LevelMap & { dress: Dress } {
   for (let x = 12; x <= 18; x++) set(x, 65, T.WALL); set(12, 66, T.WALL); set(18, 66, T.WALL);
   for (const s of [WEST_STREAM, EAST_STREAM, EAST_BRANCH]) line(s, (x, y) => { set(x, y, T.WATER); set(x + 1, y, T.WATER); });
   // the square (packed dirt) in the south-centre
-  for (let y = 65; y <= 75; y++) for (let x = 54; x <= 63; x++) set(x, y, T.FLOOR);
+  for (let y = SQUARE.y0; y <= SQUARE.y1; y++) for (let x = SQUARE.x0; x <= SQUARE.x1; x++) set(x, y, T.FLOOR);
   for (const p of PATHS) line(p, (x, y) => { if (inb(x, y) && get(x, y) !== T.WATER && get(x, y) !== T.FLOOR) set(x, y, T.PATH); }, true);
   for (const b of BUILDINGS) if (b.id === 'bridge') {
     for (let y = Math.ceil(b.y - b.ey / 2); y <= Math.floor(b.y + b.ey / 2); y++) for (let x = Math.ceil(b.x - b.ex / 2); x <= Math.floor(b.x + b.ex / 2); x++) set(x, y, get(x, y) === T.WATER ? T.BRIDGE : get(x, y) === T.TREE || get(x, y) === T.WALL ? T.PATH : get(x, y));
@@ -185,11 +197,12 @@ export function makeTown(): LevelMap & { dress: Dress } {
   // headstones in the graveyard
   const G = GRAVEYARD;
   for (let y = G.y0 + 2; y < G.y1; y += 2) for (let x = G.x0 + 2; x < G.x1; x += 2) if ((x * 5 + y * 3) % 7 !== 0) m.objects.push(obj('cross', x, y));
+  for (const c of COWS) { set(c.x, c.y, T.GRASS); m.objects.push(obj('cow', c.x, c.y, c.dir)); }
   // the closed entrances
   for (const n of [2, 3, 12]) { const p = POINTS.find((q) => q.n === n)!; set(p.x, p.y, T.GRASS); m.objects.push(obj('sealed', p.x, p.y, n)); }
   // scattered dead trees on open ground, clear of paths, buildings, people and water
   const rnd = lcg(1996);
-  const keep = [...NPCS, ...POINTS, TOWN_START, TOWN_FROM_CATHEDRAL, TAVERN_LIGHT];
+  const keep = [...NPCS, ...POINTS, ...COWS, TOWN_START, TOWN_FROM_CATHEDRAL, TAVERN_LIGHT];
   const near = (x: number, y: number, r: number, f: (t: number) => boolean) => { for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (inb(x + dx, y + dy) && f(get(x + dx, y + dy))) return true; return false; };
   for (let i = 0; i < 400; i++) {
     const x = 3 + Math.floor(rnd() * (W - 6)), y = 3 + Math.floor(rnd() * (H - 6));
