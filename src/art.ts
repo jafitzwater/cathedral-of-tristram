@@ -3,7 +3,7 @@
 // The game asks for a set of groups per zone (wantedGroups); assets outside the set are released (ImageBitmap.close) before new
 // ones are fetched, so resident decoded memory never exceeds the zone's sum. Until an atlas is decoded, callers get `false`
 // and draw a fallback silhouette.
-export interface Frame { id: string; x: number; y: number; w: number; h: number; ax: number; ay: number; ms?: number; slots?: [number, number]; cell?: [number, number] }
+export interface Frame { id: string; x: number; y: number; w: number; h: number; ax: number; ay: number; ms?: number; slots?: [number, number]; cell?: [number, number]; eaves?: number; fp_m?: [number, number]; fp_tiles?: [number, number] }
 export interface ArtAsset { key: string; group: string; type: 'atlas' | 'image'; file: string; w: number; h: number; mib: number; frames?: Frame[]; license: string; author: string; source: string }
 export interface AnimInfo { n: number; ms: number; asset: string }
 export interface ArtManifest { version: number; groups: Record<string, string[]>; anims: Record<string, { kind: string; height: number; actions: Record<string, AnimInfo> }>; assets: ArtAsset[] }
@@ -22,9 +22,9 @@ export function wantedGroups(zone: Zone, cls: string | null, engaged: string | n
   const g = ['shared'];
   if (zone === 'menu' || !cls) return g;
   g.push(`hero-${cls}-town`);
-  if (zone === 'town') g.push('town-npcs');
+  if (zone === 'town') g.push('town-tiles', 'town-buildings', 'town-npcs');
   else {
-    g.push(`hero-${cls}-combat`);
+    g.push('dungeon-tiles', `hero-${cls}-combat`);
     if (zone === 'butcher') g.push('butcher');
     else { g.push('roamers'); if (engaged) g.push(`roamer-${engaged}-combat`); }
   }

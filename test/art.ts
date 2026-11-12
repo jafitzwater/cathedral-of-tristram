@@ -13,12 +13,18 @@ for (const a of m.assets) {
   assert.ok(fs.existsSync(`public/art/${a.file}`), `${a.file} shipped`);
   assert.ok(!a.file.includes('review'), 'nothing from review/');
 }
-for (const f of fs.readdirSync('public/art')) assert.ok(f === 'manifest.json' || m.assets.some((a) => a.file === f), `stray file ${f}`);
-const want = ['shared', 'town-npcs', 'roamers', 'butcher', ...CLASSES.flatMap((c) => [`hero-${c}-town`, `hero-${c}-combat`]), ...ROAMERS.map((r) => `roamer-${r}-combat`)];
+for (const f of fs.readdirSync('public/art')) assert.ok(f === 'manifest.json' || f === 'town-layout.json' || m.assets.some((a) => a.file === f), `stray file ${f}`);
+const want = ['shared', 'town-tiles', 'dungeon-tiles', 'town-buildings', 'town-npcs', 'roamers', 'butcher', ...CLASSES.flatMap((c) => [`hero-${c}-town`, `hero-${c}-combat`]), ...ROAMERS.map((r) => `roamer-${r}-combat`)];
 assert.deepEqual(Object.keys(m.groups).sort(), want.sort());
 assert.equal(m.groups['town-npcs'].length, 8, 'all 8 NPC sheets');
 assert.equal(m.groups.roamers.length, 4, 'four roamer idle_walk sheets');
 assert.deepEqual(m.groups.butcher.sort(), ['monsters/butcher-combat', 'monsters/butcher-idle_walk']);
+// Order 7 (2c split): town floors/plants + buildings only in town, cathedral floors + Kenney walls only in the dungeon
+assert.deepEqual(m.groups['town-tiles'].sort(), ['tiles/plants', 'tiles/town-floors']);
+assert.deepEqual(m.groups['dungeon-tiles'].sort(), ['tiles/cath-floors', 'tiles/walls-props']);
+assert.deepEqual(m.groups['town-buildings'], ['town/buildings']);
+assert.ok(wantedGroups('town', 'warrior').includes('town-buildings') && !wantedGroups('town', 'warrior').includes('dungeon-tiles'));
+for (const z of ['cathedral', 'butcher'] as const) assert.ok(wantedGroups(z, 'rogue').includes('dungeon-tiles') && !wantedGroups(z, 'rogue').some((g) => g.startsWith('town-')));
 for (const k of ['ui/panel-character', 'ui/panel-spellbook', 'ui/panel-inventory', 'ui/orb-life', 'ui/orb-mana', 'ui/orb-empty', 'ui/belt-slot']) assert.ok(m.groups.shared.includes(k), k);
 
 // ---- memory budget: every zone / class / engaged type <= 32 MiB decoded (w*h*4) ----

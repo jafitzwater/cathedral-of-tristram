@@ -3,7 +3,8 @@
 import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './iso';
 import type { NpcDef } from './levels/town';
 import { T, TALL, at } from './levels/types';
-import { TOWN_PORTAL_SPOT } from './levels/town';
+import { BUILDINGS, TOWN_PORTAL_SPOT, type Building } from './levels/town';
+import { buildingFade, frontS, sortKey, type SpriteBox } from './townArt';
 import { art, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
 import { wallData, wallFade } from './walls';
 import { itemIconId } from './hud';
@@ -37,20 +38,27 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   c.save(); c.beginPath(); c.rect(0, 0, view.w, view.h); c.clip();
   const sprites: Sprite[] = [];
   // gather entities by diagonal
-  type Ent = { s: number; draw: () => void };
+  type Ent = { s: number; draw: () => void; x?: number; y?: number };
   const ents: Ent[] = [];
   const pd = g.p.x + g.p.y;
   const lightAt = (x: number, y: number) => town ? 1 : Math.max(0, 1 - Math.hypot(x - g.p.x, y - g.p.y) / (LIGHT_R + g.d.light));
   const vis = (x: number, y: number) => town || (lv.explored[Math.round(y) * m.w + Math.round(x)] && lightAt(x, y) > 0.05);
-  for (const o of m.objects) if (vis(o.x, o.y)) ents.push({ s: o.x + o.y, draw: () => drawObj(c, g, o, cam, sprites, lightAt(o.x, o.y)) });
+  for (const o of m.objects) if (vis(o.x, o.y)) ents.push({ s: o.x + o.y, x: o.x, y: o.y, draw: () => drawObj(c, g, o, cam, sprites, lightAt(o.x, o.y)) });
   if (g.portal) {
     const pp = town ? TOWN_PORTAL_SPOT : g.portal;
-    if (vis(pp.x, pp.y)) ents.push({ s: pp.x + pp.y, draw: () => drawPortal(c, pp, cam, time) });
+    if (vis(pp.x, pp.y)) ents.push({ s: pp.x + pp.y, x: pp.x, y: pp.y, draw: () => drawPortal(c, pp, cam, time) });
   }
-  for (const gi of lv.items) if (vis(gi.x, gi.y)) ents.push({ s: gi.x + gi.y - 0.1, draw: () => drawItem(c, gi.item, gi.x, gi.y, cam, sprites, gi) });
-  for (const mo of lv.monsters) if (vis(mo.x, mo.y)) ents.push({ s: mo.x + mo.y + (mo.alive ? 0 : -0.2), draw: () => drawMon(c, g, mo, cam, sprites, lightAt(mo.x, mo.y), time) });
-  for (const n of g.npcs()) ents.push({ s: n.x + n.y, draw: () => drawNpc(c, g, n, cam, sprites, time) });
-  if (!g.dead || true) ents.push({ s: pd, draw: () => drawPlayer(c, g, g.p, cam, time) });
+  for (const gi of lv.items) if (vis(gi.x, gi.y)) ents.push({ s: gi.x + gi.y - 0.1, x: gi.x, y: gi.y, draw: () => drawItem(c, gi.item, gi.x, gi.y, cam, sprites, gi) });
+  for (const mo of lv.monsters) if (vis(mo.x, mo.y)) ents.push({ s: mo.x + mo.y + (mo.alive ? 0 : -0.2), x: mo.x, y: mo.y, draw: () => drawMon(c, g, mo, cam, sprites, lightAt(mo.x, mo.y), time) });
+  for (const n of g.npcs()) ents.push({ s: n.x + n.y, x: n.x, y: n.y, draw: () => drawNpc(c, g, n, cam, sprites, time) });
+  if (!g.dead || true) ents.push({ s: pd, x: g.p.x, y: g.p.y, draw: () => drawPlayer(c, g, g.p, cam, time) });
+  // Order 7: town buildings and set dressing (CC0 Order 2c art) as sorted sprites; footprint tiles render as ground under them
+  const pieces = town ? townPieces() : [];
+  for (const pc of pieces) {
+    const fade = buildingFade(pc.b, pc.f, g.p.x, g.p.y);
+    ents.push({ s: frontS(pc.b), draw: () => drawPiece(c, pc.b, cam, fade) });
+  }
+  if (pieces.length) for (const e of ents) if (e.x !== undefined) e.s = sortKey(e.s, e.x, e.y!, pieces);
   ents.sort((a, b) => a.s - b.s);
   let ei = 0;
   const wd = !town && hasFrame('stoneWall_n') ? wallData(m) : null;
@@ -78,6 +86,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
           continue;
         }
       }
+      if (t === T.HOUSE && town && pieces.length) { floorArt(c, town, T.GRASS, x, y, sx, sy, seen); continue; }
       if (t === T.TREE && hasFrame('bigtree01')) {
         floorArt(c, town, T.GRASS, x, y, sx, sy, seen);
         drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6);
@@ -126,6 +135,22 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   if (g.speech) { c.fillStyle = '#ff6040'; c.font = 'bold 16px serif'; c.fillText(g.speech.text, view.w / 2, 86); }
   c.restore();
   lastSprites = sprites;
+}
+
+/** The town's placed pieces with their atlas frames (empty while the town-buildings group is not resident). */
+function townPieces(): { b: Building; f: SpriteBox }[] {
+  if (!hasFrame('smithy_full')) return [];
+  const out: { b: Building; f: SpriteBox }[] = [];
+  for (const b of BUILDINGS) { const e = art.frame(b.art); if (e) out.push({ b, f: { ax: e.f.ax, ay: e.f.ay, w: e.f.w, h: e.f.h, eaves: e.f.eaves } }); }
+  return out;
+}
+function drawPiece(c: CanvasRenderingContext2D, b: Building, cam: { x: number; y: number }, fade: { roof: number; base: number }) {
+  const p = tileToScreen(b.x, b.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
+  if (fade.roof === fade.base) { c.globalAlpha = fade.base; drawFrame(c, b.art, x, y, 1, b.flip); c.globalAlpha = 1; return; }
+  const f = art.frame(b.art)!.f, ey = Math.round(y - f.ay + (f.eaves ?? 0));
+  for (const [y0, y1, a] of [[-1e4, ey, fade.roof], [ey, 1e4, fade.base]] as const) {
+    c.save(); c.beginPath(); c.rect(-1e4, y0, 3e4, y1 - y0); c.clip(); c.globalAlpha = a; drawFrame(c, b.art, x, y, 1, b.flip); c.restore();
+  }
 }
 
 const hash = (x: number, y: number) => ((x * 73856093) ^ (y * 19349663)) >>> 0;

@@ -21,17 +21,37 @@ const copy = (rel) => { const to = path.join(OUT, rel.replace(/\//g, '-')); fs.c
 const readJ = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 const mib = (w, h) => +(w * h * 4 / MIB).toFixed(3);
 
-// ---- shared: tiles, items, ui ----
-for (const f of ['tiles/floors.json', 'tiles/plants.json', 'tiles/walls-props.json', 'items/items.json']) {
+// ---- tiles + items (Order 2c split): dungeon tiles load only in the dungeon, town tiles only in town; items stay shared ----
+const TILE_GROUP = { 'tiles/town-floors.json': 'town-tiles', 'tiles/plants.json': 'town-tiles', 'tiles/cath-floors.json': 'dungeon-tiles', 'tiles/walls-props.json': 'dungeon-tiles', 'items/items.json': 'shared' };
+for (const [f, group] of Object.entries(TILE_GROUP)) {
   const meta = readJ(path.join(SRC, f)), L = lic(meta), dir = path.dirname(f);
   if (!isCC0(L.license)) { skipped.push({ file: f, reason: 'no CC0 license declared' }); continue; }
   const [w, h] = meta.size_wh;
   const frames = meta.frames.map((fr) => {
     const [x, y] = fr.atlas_xy; const [fw, fh] = fr.size_wh ?? fr.size_px_wh;
-    const [ax, ay] = fr.anchor_in_frame_px ?? [0, 0];
+    const [ax, ay] = fr.anchor_in_frame_px ?? fr.anchor_px ?? [0, 0];
     return { id: fr.id, x, y, w: fw, h: fh, ax, ay, ...(fr.size_slots_wh ? { slots: fr.size_slots_wh } : {}), ...(fr.trim_xy && fr.src_scaled_wh ? { cell: fr.trim_xy } : {}) };
   });
-  assets.push({ key: f.replace('.json', ''), group: 'shared', type: 'atlas', file: copy(`${dir}/${meta.atlas}`), w, h, mib: mib(w, h), frames, ...L });
+  assets.push({ key: f.replace('.json', ''), group, type: 'atlas', file: copy(`${dir}/${meta.atlas}`), w, h, mib: mib(w, h), frames, ...L });
+}
+// ---- town buildings + set dressing (Order 2c): town-only group. buildings.json carries no license field, so the license comes
+// from the art folder's CREDITS.md, which declares every file CC0 1.0 and names the sources (Quaternius Medieval Village Pack +
+// self-made). The import refuses the atlas if that statement or the source line is missing.
+{
+  const credits = fs.readFileSync(path.join(SRC, 'CREDITS.md'), 'utf8');
+  const meta = readJ(path.join(SRC, 'town/buildings.json')), layout = readJ(path.join(SRC, 'town/layout.json'));
+  const ok = /All art in `\/workspace\/tristram-art` is licensed \*\*CC0 1\.0/.test(credits) && /Medieval Village Pack/.test(credits) && /Adria's low round thatched hut/.test(credits);
+  if (!ok) skipped.push({ file: 'town/buildings.png', reason: 'CC0 not confirmed by CREDITS.md' });
+  else {
+    const [w, h] = meta.size_wh;
+    // roof/base split row: the art's eaves row when it has one; the tavern's split reports eaves_z 0, so use 45% of its height
+    const eavesY = (fr) => { const b = meta.buildings[fr.building]; const z = b.occluder_split.eaves_z_m;
+      return z > 0 ? fr.eaves_px[1] : Math.round(fr.anchor_in_frame_px[1] - 0.45 * fr.height_m * meta.scale.vert_px_per_m); };
+    const frames = meta.frames.map((fr) => ({ id: fr.id, x: fr.atlas_xy[0], y: fr.atlas_xy[1], w: fr.size_wh[0], h: fr.size_wh[1], ax: fr.anchor_in_frame_px[0], ay: fr.anchor_in_frame_px[1], eaves: eavesY(fr), fp_m: fr.footprint_m, fp_tiles: fr.footprint_tiles }));
+    assets.push({ key: 'town/buildings', group: 'town-buildings', type: 'atlas', file: copy('town/buildings.png'), w, h, mib: mib(w, h), frames, license: 'CC0 1.0',
+      author: 'Quaternius (Medieval Village Pack), Project Tristram sprite director (self-made)', source: 'https://quaternius.com | /workspace/tristram-art/CREDITS.md' });
+    fs.writeFileSync(path.join(OUT, 'town-layout.json'), JSON.stringify({ placements: layout.placements, d1_towner_reference: layout.d1_towner_reference }) + '\n');
+  }
 }
 {
   const meta = readJ(path.join(SRC, 'ui/ui.json')), L = lic(meta);

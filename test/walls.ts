@@ -77,7 +77,7 @@ assert.equal(wallFade(10, 9, ...H), 1, 'NE wall is behind');
 assert.equal(wallFade(13, 13, ...H), 1, 'far in front (6 diagonals)');
 assert.equal(wallFade(10.5, 10.5, 10.5, 10.5), 1, 'same diagonal');
 
-// memory: the wall pieces are in the shared atlas, so the per-zone sets (and the 32 MiB budget) don't change
-assert.ok(man.groups.shared.includes('tiles/walls-props'));
+// memory: the wall pieces load with the dungeon tiles (Order 7 split), and every zone set stays within 32 MiB
+assert.ok(man.groups['dungeon-tiles'].includes('tiles/walls-props'));
 for (const cls of ['warrior', 'rogue', 'sorcerer']) for (const z of ['town', 'cathedral', 'butcher'] as const) for (const e of [null, 'skeleton']) assert.ok(groupsMiB(man, wantedGroups(z, cls, e)) <= 32);
 console.log(`walls: OK (${arches} arches, ${doors} doors, ${cols} columns over 25 levels)`);

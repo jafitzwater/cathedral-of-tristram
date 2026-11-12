@@ -54,9 +54,10 @@ export function deserialize(s: SaveData): Game {
   setUidSeq(s.uid);
   for (const [id, sl] of Object.entries(s.levels) as [LevelId, SavedLevel][]) {
     const lv = g.makeLevel(id);
-    lv.map.tiles = Uint8Array.from(sl.tiles);
+    // Town is static and rebuilt from makeTown (Order 7 moved its buildings), so a save's town tiles/objects are not restored.
+    if (id !== 'town') { lv.map.tiles = Uint8Array.from(sl.tiles); lv.map.objects = sl.objects; }
     lv.explored = unb64(sl.explored, lv.map.w * lv.map.h);
-    lv.map.objects = sl.objects; lv.items = sl.items; lv.corpses = sl.corpses;
+    lv.items = sl.items; lv.corpses = sl.corpses;
     lv.monsters = sl.monsters.map((sm) => {
       const m: Mon = { ...g.spawnMon(MONSTERS[sm.id], sm.tx, sm.ty), uid: sm.uid, hp: sm.hp, maxHp: sm.maxHp, alive: sm.alive, active: sm.active, spoke: sm.spoke };
       if (!m.alive) m.state = 'dead';
@@ -68,6 +69,11 @@ export function deserialize(s: SaveData): Game {
   g.cur = s.cur;
   g.rng = new Rng(s.rng); g.monUid = s.monUid; // restore last: rebuilding levels above draws from the rng and monster uids
   g.p = actorAt(s.pos.x, s.pos.y);
+  if (g.cur === 'town') { // pre-Order-7 town positions or dropped items may now sit inside a building
+    const near = (x: number, y: number) => { for (let r = 0; r < 48; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (g.tileWalk(x + dx, y + dy)) return { x: x + dx, y: y + dy }; return { x, y }; };
+    const f = near(s.pos.x, s.pos.y); g.p = actorAt(f.x, f.y);
+    for (const it of g.levels.town!.items) { const q = near(it.x, it.y); it.x = q.x; it.y = q.y; }
+  }
   g.refresh();
   return g;
 }
