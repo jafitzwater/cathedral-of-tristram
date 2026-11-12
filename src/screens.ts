@@ -4,11 +4,14 @@ import { CLASSES, type ClassId } from './data/classes';
 import { VIEW_W, VIEW_H } from './iso';
 import type { UI } from './ui';
 import type { Hero } from './player';
+import { NAME_BOX, NAME_CANCEL, NAME_OK, resolveName } from './nameEntry';
 
 export type Screen = 'title' | 'menu' | 'credits' | 'select' | 'class' | 'name' | 'game' | 'loading' | 'exit';
 export interface ScreenHooks {
   go(s: Screen): void; heroes(): string[]; peek(n: string): Hero | null; load(n: string): void; del(n: string): void;
   create(name: string, cls: ClassId): void; nameInput(): HTMLInputElement; credits: string;
+  /** Show the HTML name form and focus its input synchronously (must run inside the tap handler, Order 8). */
+  focusName(): void;
 }
 export class Screens {
   selHero = ''; cls: ClassId = 'warrior'; t = 0; creditsY = 0; confirmDel = false; err = '';
@@ -77,20 +80,18 @@ export class Screens {
           ui.text({ warrior: 'Skill: Item Repair', rogue: 'Skill: Trap Disarm', sorcerer: 'Skill: Staff Recharge' }[id], x + 90, 330, { align: 'center', size: 11, color: '#9a8a62' });
           ui.text({ warrior: 'Short sword, buckler, club', rogue: 'Short bow', sorcerer: 'Staff of Charged Bolt, Firebolt' }[id], x + 90, 350, { align: 'center', size: 10, color: '#9a8a62' });
         });
-        ui.button('OK', 200, 400, 110, 34, () => { const inp = this.h.nameInput(); inp.value = ''; this.err = ''; this.h.go('name'); setTimeout(() => inp.focus(), 50); });
+        ui.button('OK', 200, 400, 110, 34, () => { const inp = this.h.nameInput(); inp.value = ''; this.err = ''; this.h.go('name'); this.h.focusName(); });
         ui.button('Cancel', 330, 400, 110, 34, () => this.h.go('select'));
         break;
       }
       case 'name': {
         this.bg(ui);
-        const inp = this.h.nameInput();
+        // the typed text, caret, OK and Cancel taps belong to the HTML form laid over these boxes (main.ts); the canvas draws the D1 look
         ui.text(`Enter a name for your ${CLASSES[this.cls].name}`, VIEW_W / 2, 170, { align: 'center', size: 18, color: '#d8b860' });
-        ui.panel(170, 200, 300, 44);
-        ui.text(inp.value + (Math.floor(this.t * 2) % 2 ? '_' : ''), VIEW_W / 2, 222, { align: 'center', size: 20, color: '#fff' });
-        ui.area(170, 200, 300, 44, () => inp.focus());
+        ui.panel(NAME_BOX.x, NAME_BOX.y, NAME_BOX.w, NAME_BOX.h);
         if (this.err) ui.text(this.err, VIEW_W / 2, 262, { align: 'center', size: 12, color: '#d04040' });
-        ui.button('OK', 200, 300, 110, 34, () => this.submitName());
-        ui.button('Cancel', 330, 300, 110, 34, () => { inp.blur(); this.h.go('class'); });
+        ui.button('OK', NAME_OK.x, NAME_OK.y, NAME_OK.w, NAME_OK.h, () => this.submitName());
+        ui.button('Cancel', NAME_CANCEL.x, NAME_CANCEL.y, NAME_CANCEL.w, NAME_CANCEL.h, () => this.cancelName());
         break;
       }
       case 'loading': {
@@ -110,10 +111,11 @@ export class Screens {
   }
   submitName() {
     const inp = this.h.nameInput();
-    const n = inp.value.trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 15);
-    if (!n) { this.err = 'Enter a name'; return; }
-    if (this.h.heroes().includes(n)) { this.err = 'A hero with that name already exists'; return; }
+    const r = resolveName(inp.value, CLASSES[this.cls].name, this.h.heroes());
+    if ('err' in r) { this.err = r.err; return; }
+    this.err = '';
     inp.blur();
-    this.h.create(n, this.cls);
+    this.h.create(r.name, this.cls);
   }
+  cancelName() { this.h.nameInput().blur(); this.err = ''; this.h.go('class'); }
 }

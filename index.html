@@ -17,13 +17,25 @@
     canvas { display: block; position: fixed; left: 0; top: 0; touch-action: none; -webkit-touch-callout: none; }
     #safe { position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
     #rotate { display: none; position: fixed; inset: 0; background: #000; color: #d8c89a; font: 20px serif; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+    /* Order 8: the name form is real HTML over the canvas (above the canvas, safe-area and fullscreen layers; under #rotate) */
+    #nameForm { display: none; position: fixed; inset: 0; margin: 0; z-index: 20; pointer-events: none; }
+    #nameForm.on { display: block; }
+    #nameForm > * { position: fixed; pointer-events: auto; box-sizing: border-box; margin: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    #name { background: transparent; border: 0; outline: none; color: #fff; caret-color: #d8b860; font-family: serif; text-align: center; padding: 0 8px; border-radius: 0; -webkit-appearance: none; appearance: none; -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+    #name::placeholder { color: #6a5a3a; }
+    #nameOk, #nameCancel { background: transparent; border: 0; padding: 0; color: transparent; }
+    #rotate { z-index: 30; }
     @media (orientation: portrait) { #rotate { display: flex; } #view { display: none; } }
   </style>
 </head>
 <body>
   <canvas id="view"></canvas>
   <div id="safe"></div>
-  <input id="name" maxlength="15" autocomplete="off" autocapitalize="words" style="position:fixed;left:-1000px;top:0;opacity:0" />
+  <form id="nameForm" autocomplete="off" novalidate>
+    <input id="name" type="text" maxlength="15" autocapitalize="words" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="Hero name" />
+    <button id="nameOk" type="submit" aria-label="OK"></button>
+    <button id="nameCancel" type="button" aria-label="Cancel"></button>
+  </form>
   <div id="rotate">Rotate your device to landscape to play.</div>
   <script type="module" src="/src/main.ts"></script>
 </body>

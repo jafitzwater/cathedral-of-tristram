@@ -8,15 +8,19 @@ import { UI, type Box } from './ui';
 import { Audio } from './audio';
 import { art, loadArt, wantedGroups } from './art';
 import { ZoneTracker } from './zones';
-import { VIEW_H, VIEW_W, view } from './iso';
+import { view } from './iso';
 import { joystickVector } from './controls';
 import { T } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
 import { saveGame, loadGame, listHeroes, peekHero, deleteHero } from './save';
 import creditsText from '../CREDITS.md?raw';
+import { NAME_BOX, NAME_CANCEL, NAME_OK, cssRect, frontLayout, inputFontPx, isFormTarget } from './nameEntry';
+import { CLASSES } from './data/classes';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const nameInput = document.getElementById('name') as HTMLInputElement;
+const nameForm = document.getElementById('nameForm') as HTMLFormElement;
+const nameOk = document.getElementById('nameOk') as HTMLButtonElement, nameCancel = document.getElementById('nameCancel') as HTMLButtonElement;
 const safe = document.getElementById('safe') as HTMLDivElement;
 const c = canvas.getContext('2d', { alpha: false })!;
 const ui = new UI();
@@ -48,8 +52,27 @@ const scr = new Screens({
   del: (n) => deleteHero(localStorage, n),
   create: (name, cls) => { const g = new Game(name, cls); saveGame(localStorage, g); startGame(g); },
   nameInput: () => nameInput, credits: creditsText,
+  focusName: () => { placeName(); nameInput.focus({ preventScroll: true }); }, // synchronous, inside the tap: phones open the keyboard
 });
-nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') scr.submitName(); });
+// Order 8: Enter / Done submits the form (Android IMEs often send keyCode 229 on keydown, so rely on the form's submit)
+nameForm.addEventListener('submit', (e) => { e.preventDefault(); if (screen === 'name') scr.submitName(); });
+nameCancel.addEventListener('click', () => { if (screen === 'name') scr.cancelName(); });
+nameInput.addEventListener('blur', () => { if (window.scrollX || window.scrollY) window.scrollTo(0, 0); }); // undo iOS's keyboard pan
+/** Show/position the HTML name form over the canvas-drawn name box and buttons (or hide it off the name screen). */
+let nameKey = '';
+function placeName() {
+  const on = screen === 'name';
+  if (!on) { if (nameKey) { nameKey = ''; nameForm.classList.remove('on'); if (document.activeElement === nameInput) nameInput.blur(); } return; }
+  const l = frontLayout(W, H, vv()), key = `${l.s},${l.ox},${l.oy},${scr.cls}`;
+  if (key === nameKey) return;
+  nameKey = key; nameForm.classList.add('on');
+  nameInput.placeholder = CLASSES[scr.cls].name;
+  for (const [el, b] of [[nameInput, NAME_BOX], [nameOk, NAME_OK], [nameCancel, NAME_CANCEL]] as const) {
+    const r = cssRect(l, b); Object.assign(el.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  }
+  nameInput.style.fontSize = `${inputFontPx(l.s)}px`;
+}
+const vv = () => window.visualViewport ? { width: visualViewport!.width, height: visualViewport!.height, offsetLeft: visualViewport!.offsetLeft, offsetTop: visualViewport!.offsetTop } : null;
 
 // ---- full-screen sizing (no black bars), DPR-crisp backing store, safe-area insets ----
 let W = 844, H = 390, dpr = 1;
@@ -65,13 +88,18 @@ function fit() {
   hud.lay = { W, H, dpr, inset: { ...inset } };
 }
 addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 200)); fit();
+// Order 8: the phone keyboard resizes (Android) or pans (iOS) the visual viewport; re-fit and keep the name box visible
+window.visualViewport?.addEventListener('resize', () => { fit(); placeName(); });
+window.visualViewport?.addEventListener('scroll', placeName);
 
 // ---- browser behaviour: no zoom / scroll / long-press menu; fullscreen + landscape lock on first tap ----
-for (const ev of ['contextmenu', 'gesturestart', 'dblclick', 'selectstart']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
-document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+// (never on the name form: its input needs the default focus, caret, selection and keyboard behaviour; Order 8)
+for (const ev of ['contextmenu', 'gesturestart', 'dblclick', 'selectstart']) document.addEventListener(ev, (e) => { if (!isFormTarget(e.target)) e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', (e) => { if (!isFormTarget(e.target)) e.preventDefault(); }, { passive: false });
 let wentFull = false;
 function goFullscreen() {
-  if (wentFull) return; wentFull = true;
+  // Order 8: never while the name form is up: entering fullscreen / locking orientation resizes the page and drops focus
+  if (wentFull || screen === 'name') return; wentFull = true;
   const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
   const lock = () => { const o = window.screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }; o?.lock?.('landscape').catch(() => {}); };
   try {
@@ -119,6 +147,8 @@ const end = (e: PointerEvent, cancel: boolean) => {
   }
 };
 canvas.addEventListener('pointerup', (e) => { e.preventDefault(); end(e, false); });
+// a tap on the canvas must not move focus (compat mousedown would blur the name input the tap handler just focused)
+canvas.addEventListener('mousedown', (e) => e.preventDefault());
 canvas.addEventListener('pointercancel', (e) => end(e, true));
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && screen === 'game') hud.menu = hud.menu === 'none' ? 'main' : 'none'; });
 
@@ -146,7 +176,7 @@ function frame(now: number) {
   } else {
     // front-end screens keep their D1 640x480 layout, centred over a full-screen backdrop
     c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
-    const s = Math.min(W / VIEW_W, H / VIEW_H), ox = (W - VIEW_W * s) / 2, oy = (H - VIEW_H * s) / 2;
+    const { s, ox, oy } = frontLayout(W, H, vv());
     c.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
     if (screen === 'loading') {
       scr.draw(ui, 'loading', dt);
@@ -155,6 +185,7 @@ function frame(now: number) {
       if (loadT <= 0 && game && artReady && (artDone || artWaitT > 8)) { artWait = null; game.finishTravel(); for (const sf of game.sfx) audio.play(sf); game.sfx.length = 0; screen = 'game'; }
     } else { if (artReady && !game) void art.setGroups(zones.update(null, dt)); scr.draw(ui, screen, dt); }
   }
+  placeName();
   workMs += performance.now() - w0;
   if (frames === 0 && fpsLog.length) { workLog.push(+(workMs / Math.max(1, fpsLog[fpsLog.length - 1])).toFixed(2)); workMs = 0; if (workLog.length > 120) workLog.shift(); }
   requestAnimationFrame(frame);
