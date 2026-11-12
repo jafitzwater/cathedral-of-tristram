@@ -2,7 +2,8 @@
 import { PLAY_H, TILE_H, TILE_W, VIEW_W, tileToScreen, DIRS, pickTile, type P } from './iso';
 import { T, TALL, at } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
-import { drawArt } from './art';
+import { drawArt, drawFrame, hasFrame } from './art';
+import { itemIconId } from './hud';
 import type { Actor, Game, Target } from './game';
 
 const MON_COLOR: Record<string, [string, number]> = {
@@ -61,12 +62,15 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
       if (!town && !lv.explored[y * m.w + x]) continue;
       const lit = lightAt(x, y), seen = town ? 1 : Math.max(0.18, lit);
       c.globalAlpha = 1;
-      if (TALL.has(t)) {
+      if (t === T.TREE && hasFrame('bigtree01')) {
+        floorArt(c, town, T.GRASS, x, y, sx, sy, seen);
+        drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6);
+      } else if (TALL.has(t)) {
         const [top, left, right, hgt] = TALL_COL[t];
         // D1 wall transparency: walls just in front of the hero fade
         const front = s > pd && s < pd + 4 && Math.abs((x - y) - (g.p.x - g.p.y)) < 4;
         c.globalAlpha = front ? 0.35 : 1;
-        if (!drawArt(c, `tile_${t}`, sx, sy + TILE_H)) {
+        if (!(t === T.PILLAR && floorArt(c, town, T.FLOOR, x, y, sx, sy, seen) && drawFrame(c, 'stoneColumn_s', sx, sy + TILE_H - 4, 1.3))) {
           shade(c, left, seen); c.beginPath(); c.moveTo(sx - TILE_W / 2, sy + TILE_H / 2 - hgt); c.lineTo(sx, sy + TILE_H - hgt); c.lineTo(sx, sy + TILE_H); c.lineTo(sx - TILE_W / 2, sy + TILE_H / 2); c.fill();
           shade(c, right, seen); c.beginPath(); c.moveTo(sx, sy + TILE_H - hgt); c.lineTo(sx + TILE_W / 2, sy + TILE_H / 2 - hgt); c.lineTo(sx + TILE_W / 2, sy + TILE_H / 2); c.lineTo(sx, sy + TILE_H); c.fill();
           shade(c, top, seen); diamond(c, sx, sy - hgt); c.fill();
@@ -74,7 +78,8 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
         c.globalAlpha = 1;
       } else {
         const [a, b] = FLOOR_COL[t] ?? FLOOR_COL[T.FLOOR];
-        if (!drawArt(c, `tile_${t}`, sx, sy + TILE_H)) { shade(c, (x + y) % 2 ? a : b, seen); diamond(c, sx, sy); c.fill(); }
+        if (!floorArt(c, town, t, x, y, sx, sy, seen)) { shade(c, (x + y) % 2 ? a : b, seen); diamond(c, sx, sy); c.fill(); }
+        if (!town && (t === T.UP || t === T.DOWN)) drawFrame(c, t === T.UP ? 'stairs_s' : 'stairsAged_s', sx, sy + TILE_H - 2);
         if (t === T.UP || t === T.DOWN) { c.fillStyle = `rgba(255,230,160,${0.6 * seen})`; c.font = '10px serif'; c.textAlign = 'center'; c.fillText(t === T.UP ? 'UP' : 'DOWN', sx, sy + 20); }
         if (t === T.WATER) { c.fillStyle = 'rgba(120,160,255,0.15)'; c.fillRect(sx - 6 + Math.sin(time + x) * 6, sy + 14, 12, 2); }
       }
@@ -105,6 +110,17 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   lastSprites = sprites;
 }
 
+const hash = (x: number, y: number) => ((x * 73856093) ^ (y * 19349663)) >>> 0;
+/** Floor diamonds from the CC0 tile atlas (rubberduck), darkened by the light level. */
+function floorArt(c: CanvasRenderingContext2D, town: boolean, t: number, x: number, y: number, sx: number, sy: number, seen: number): boolean {
+  const set = town ? ({ [T.GRASS]: 'town_grass', [T.PATH]: 'town_path', [T.BRIDGE]: 'town_dirt_dark', [T.FLOOR]: 'town_dirt', [T.DOWN]: 'town_sand', [T.UP]: 'town_sand' } as Record<number, string>)[t]
+    : ({ [T.FLOOR]: 'cath_stone', [T.UP]: 'cath_stone', [T.DOWN]: 'cath_stone', [T.DOOR_OPEN]: 'cath_dirt' } as Record<number, string>)[t];
+  if (!set) return false;
+  const h = hash(x, y), v = !town && t === T.FLOOR && h % 23 === 0 ? 'cath_blood' : set;
+  if (!drawFrame(c, `${v}_${String(h % 16).padStart(2, '0')}`, sx, sy + TILE_H - 1)) return false;
+  if (seen < 0.999) { c.fillStyle = `rgba(0,0,0,${1 - seen})`; diamond(c, sx, sy); c.fill(); }
+  return true;
+}
 function shade(c: CanvasRenderingContext2D, col: string, k: number) {
   if (k >= 0.999) { c.fillStyle = col; return; }
   const n = parseInt(col.slice(1), 16);
@@ -145,10 +161,11 @@ function drawMon(c: CanvasRenderingContext2D, g: Game, mo: Game['level']['monste
 function drawObj(c: CanvasRenderingContext2D, g: Game, o: Game['level']['map']['objects'][number], cam: P, sprites: Sprite[], lit: number) {
   const p = tileToScreen(o.x, o.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
   c.globalAlpha = g.level.id === 'town' ? 1 : Math.max(0.3, lit);
-  if (!drawArt(c, `obj_${o.kind}${o.used ? '_open' : ''}`, x, y)) {
+  const objArt = o.kind === 'barrel' || o.kind === 'barrel_ex' ? (o.used ? '' : 'barrel_s') : o.kind.startsWith('chest') ? (o.used ? 'chestOpen_s' : 'chestClosed_s') : '';
+  if (!(objArt && drawFrame(c, objArt, x, y + 2, o.kind === 'chest3' ? 1.25 : 1))) {
     switch (o.kind) {
       case 'barrel': case 'barrel_ex':
-        if (o.used) { c.fillStyle = '#3a2a1a'; c.fillRect(x - 10, y - 4, 20, 4); break; }
+        if (o.used) { if (!drawFrame(c, 'woodenPile_s', x, y + 2, 0.8)) { c.fillStyle = '#3a2a1a'; c.fillRect(x - 10, y - 4, 20, 4); } break; }
         c.fillStyle = o.kind === 'barrel_ex' ? '#7a3a1a' : '#6a4a2a'; c.fillRect(x - 9, y - 24, 18, 22); c.fillStyle = '#2a1a0a'; c.fillRect(x - 9, y - 18, 18, 2); c.fillRect(x - 9, y - 8, 18, 2); break;
       case 'chest1': case 'chest2': case 'chest3': { const s = o.kind === 'chest1' ? 0.8 : o.kind === 'chest2' ? 1 : 1.2; c.fillStyle = o.used ? '#3a2a1a' : '#8a6a2a'; c.fillRect(x - 12 * s, y - 14 * s, 24 * s, 12 * s); c.fillStyle = '#c8a040'; c.fillRect(x - 2, y - 10 * s, 4, 4); break; }
       case 'sarc': c.fillStyle = o.used ? '#3a3a3a' : '#6a6a6a'; c.beginPath(); c.moveTo(x - 24, y - 4); c.lineTo(x, y - 16); c.lineTo(x + 24, y - 4); c.lineTo(x, y + 8); c.closePath(); c.fill(); c.fillStyle = '#4a4a4a'; c.fillRect(x - 3, y - 12, 6, 14); break;
@@ -172,7 +189,7 @@ export function itemColor(it: { magical: number; identified: boolean; itype: str
 }
 function drawItem(c: CanvasRenderingContext2D, it: Game['level']['items'][number]['item'], tx: number, ty: number, cam: P, sprites: Sprite[], gi: Game['level']['items'][number]) {
   const p = tileToScreen(tx, ty), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
-  if (!drawArt(c, `item_${it.idx}`, x, y)) { c.fillStyle = itemColor(it); c.beginPath(); c.moveTo(x, y - 9); c.lineTo(x + 7, y - 3); c.lineTo(x, y + 3); c.lineTo(x - 7, y - 3); c.closePath(); c.fill(); }
+  if (!drawFrame(c, itemIconId(it), x - 7, y - 12, 0.5)) { c.fillStyle = itemColor(it); c.beginPath(); c.moveTo(x, y - 9); c.lineTo(x + 7, y - 3); c.lineTo(x, y + 3); c.lineTo(x - 7, y - 3); c.closePath(); c.fill(); }
   const label = it.itype === 'ITYPE_GOLD' ? `${it.gold} gold` : it.identified ? it.iname : it.name;
   c.font = '9px serif'; c.textAlign = 'center';
   const w = c.measureText(label).width + 6;

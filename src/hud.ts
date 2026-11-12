@@ -9,6 +9,7 @@ import { T } from './levels/types';
 import { BODY_SLOTS, INV_W, INV_H, derive, equip, unequip, removeItem, pickUp, spendStat, reqOk, isBeltable, type BodySlot } from './player';
 import { itemPrice, sellPrice, boyPrice, repairCost, rechargeCost, IDENTIFY_COST, DUR_INDESTRUCTIBLE, type Item } from './itemgen';
 import { itemColor } from './render';
+import { drawFrameBox, drawImg, hasImg } from './art';
 import type { Game } from './game';
 import type { UI } from './ui';
 
@@ -43,41 +44,43 @@ export class Hud {
 
   // ---------- control panel ----------
   drawPanel(ui: UI) {
+    // Layout follows the CC0 bottom-panel art (ui/ui.json): orbs at x 64/576, belt at 194+32i, buttons at y 98.
     const g = this.g(), c = ui.c, h = g.hero, d = g.d;
-    c.fillStyle = '#2a241c'; c.fillRect(0, Y, VIEW_W, 128);
-    c.strokeStyle = '#8a7a52'; c.lineWidth = 2; c.strokeRect(1, Y + 1, VIEW_W - 2, 126);
+    const art = drawImg(c, 'ui/bottom-panel', 0, Y);
+    if (!art) { c.fillStyle = '#2a241c'; c.fillRect(0, Y, VIEW_W, 128); c.strokeStyle = '#8a7a52'; c.lineWidth = 2; c.strokeRect(1, Y + 1, VIEW_W - 2, 126); }
     ui.block(0, Y, VIEW_W, 128);
-    orb(c, 66, Y + 64, h.hp / Math.max(1, d.maxHp), '#a01010');
-    orb(c, VIEW_W - 66, Y + 64, d.maxMana ? h.mana / d.maxMana : 0, g.manaShield ? '#3060e0' : '#1830b0');
+    orb(c, 64, Y + 64, h.hp / Math.max(1, d.maxHp), '#a01010', 'ui/orb-life');
+    orb(c, VIEW_W - 64, Y + 64, d.maxMana ? h.mana / d.maxMana : 0, g.manaShield ? '#3060e0' : '#1830b0', 'ui/orb-mana');
     ui.area(16, Y + 14, 100, 100, () => this.quickPotion(true));
     ui.area(VIEW_W - 116, Y + 14, 100, 100, () => this.quickPotion(false));
-    const L = 124, R = 448, bw = 68;
-    ui.button('CHAR', L, Y + 6, bw, 26, () => { this.left = this.left === 'char' ? 'none' : 'char'; }, { on: this.left === 'char', size: 10 });
-    ui.button('QUEST', L, Y + 36, bw, 26, () => { this.left = this.left === 'quest' ? 'none' : 'quest'; }, { on: this.left === 'quest', size: 10 });
-    ui.button('MAP', L, Y + 66, bw, 26, () => { this.map = !this.map; }, { on: this.map, size: 10 });
-    ui.button('MENU', L, Y + 96, bw, 26, () => { this.menu = this.menu === 'none' ? 'main' : 'none'; }, { size: 10 });
-    ui.button('INV', R, Y + 6, bw, 26, () => { this.right = this.right === 'inv' ? 'none' : 'inv'; }, { on: this.right === 'inv', size: 10 });
-    ui.button('SPELLS', R, Y + 36, bw, 26, () => { this.right = this.right === 'spell' ? 'none' : 'spell'; }, { on: this.right === 'spell', size: 10 });
+    const btn = (label: string, x: number, on: boolean, fn: () => void) => {
+      if (art) { ui.area(x, Y + 98, 51, 22, fn); if (on) { c.fillStyle = 'rgba(255,220,140,0.22)'; c.fillRect(x, Y + 98, 51, 22); } }
+      else ui.button(label, x, Y + 98, 51, 22, fn, { on, size: 10 });
+    };
+    btn('CHAR', 175, this.left === 'char', () => { this.left = this.left === 'char' ? 'none' : 'char'; });
+    btn('INV', 233, this.right === 'inv', () => { this.right = this.right === 'inv' ? 'none' : 'inv'; });
+    btn('SPELLS', 291, this.right === 'spell', () => { this.right = this.right === 'spell' ? 'none' : 'spell'; });
+    btn('QUEST', 349, this.left === 'quest', () => { this.left = this.left === 'quest' ? 'none' : 'quest'; });
+    btn('MENU', 407, false, () => { this.menu = this.menu === 'none' ? 'main' : 'none'; });
+    ui.button('MAP', 464, Y + 98, 40, 22, () => { this.map = !this.map; }, { on: this.map, size: 10 });
     const sk = skillLabel(g, h.skill);
-    ui.button(sk, R, Y + 66, bw, 56, () => this.skillButton(), { on: this.skillArmed, size: 9 });
+    ui.button(sk, 124, Y + 36, 62, 52, () => this.skillButton(), { on: this.skillArmed, size: 9 });
     // belt
     for (let i = 0; i < 8; i++) {
-      const x = 198 + i * 31, it = h.belt[i];
-      c.fillStyle = '#15120d'; c.fillRect(x, Y + 6, 29, 29); c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, Y + 6.5, 28, 28);
-      if (it) drawIcon(c, it, x + 2, Y + 8, 25, 25);
-      ui.text(`${i + 1}`, x + 4, Y + 12, { size: 8, color: '#9a8a62' });
-      ui.area(x, Y + 6, 29, 29, () => { if (it) { if (g.pendingPick) { g.pickItem(it); return; } g.useItem(it); g.refresh(); } }, () => { if (it) this.sel = it; });
+      const x = 194 + i * 32, y = Y + 36, it = h.belt[i];
+      if (!art) { c.fillStyle = '#15120d'; c.fillRect(x, y, 28, 28); c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, y + 0.5, 27, 27); ui.text(`${i + 1}`, x + 4, y + 6, { size: 8, color: '#9a8a62' }); }
+      if (it) drawIcon(c, it, x + 1, y + 1, 26, 26);
+      ui.area(x, y, 28, 28, () => { if (it) { if (g.pendingPick) { g.pickItem(it); return; } g.useItem(it); g.refresh(); } }, () => { if (it) this.sel = it; });
     }
-    // description box
-    c.fillStyle = '#15120d'; c.fillRect(198, Y + 40, 246, 82);
-    const lines: [string, string][] = [];
-    if (g.msgT > 0) lines.push([g.msg, '#e8d8a8']);
-    else if (g.pendingPick) lines.push([`Tap an item to ${g.pendingPick}`, '#e8d8a8']);
-    else if (this.skillArmed) lines.push([`Tap a target to cast ${sk}`, '#9cf']);
-    else lines.push([`${h.name}  -  ${CLASSES[h.cls].name}  level ${h.clvl}`, '#e8d8a8']);
-    lines.push([`Life ${Math.ceil(h.hp)}/${d.maxHp}   Mana ${Math.floor(h.mana)}/${d.maxMana}`, '#d8c89a']);
-    lines.push([`Gold ${h.gold}   ${g.cur === 'town' ? 'Tristram' : 'Cathedral level 1'}${h.statPts ? `   +${h.statPts} stat points` : ''}`, '#d8c89a']);
-    lines.forEach(([s, col], i) => ui.text(s.length > 46 ? s.slice(0, 45) + '...' : s, 321, Y + 56 + i * 22, { align: 'center', size: 11, color: col }));
+    // info line (covers the art's sample text) + status line under the belt
+    c.fillStyle = '#100d0a'; c.fillRect(134, Y + 9, 372, 20);
+    let line: [string, string];
+    if (g.msgT > 0) line = [g.msg, '#e8d8a8'];
+    else if (g.pendingPick) line = [`Tap an item to ${g.pendingPick}`, '#e8d8a8'];
+    else if (this.skillArmed) line = [`Tap a target to cast ${sk}`, '#9cf'];
+    else line = [`Level ${h.clvl}  |  ${g.cur === 'town' ? 'Tristram' : 'Cathedral level 1'}  |  ${h.name}${h.statPts ? `  |  +${h.statPts} points` : ''}`, '#e8d8a8'];
+    ui.text(line[0].length > 60 ? line[0].slice(0, 59) + '...' : line[0], 320, Y + 19, { align: 'center', size: 11, color: line[1] });
+    ui.text(`Life ${Math.ceil(h.hp)}/${d.maxHp}   Mana ${Math.floor(h.mana)}/${d.maxMana}   Gold ${h.gold}`, 322, Y + 80, { align: 'center', size: 10, color: '#d8c89a' });
   }
   quickPotion(life: boolean) {
     const g = this.g(), h = g.hero;
@@ -130,28 +133,30 @@ export class Hud {
 
   // ---------- inventory ----------
   static SLOT_RECT: Record<BodySlot, [number, number, number, number]> = {
-    head: [131, 12, 58, 58], amulet: [205, 26, 29, 29], chest: [131, 82, 58, 87], handL: [36, 82, 58, 87], handR: [226, 82, 58, 87], ringL: [50, 180, 29, 29], ringR: [240, 180, 29, 29],
+    // matches the CC0 inventory panel art (ui/panel-inventory.png)
+    head: [130, 40, 56, 56], amulet: [196, 48, 28, 28], chest: [130, 100, 56, 84], handL: [72, 80, 28, 84], handR: [196, 100, 56, 84], ringL: [72, 170, 28, 28], ringR: [226, 170, 28, 28],
   };
   drawInv(ui: UI) {
     const g = this.g(), h = g.hero, c = ui.c, X = 320;
-    ui.panel(X, 0, 320, PLAY_H);
+    const art = drawImg(c, 'ui/panel-inventory', X, 0);
+    if (art) ui.block(X, 0, 320, PLAY_H); else ui.panel(X, 0, 320, PLAY_H);
     for (const s of BODY_SLOTS) {
       const [x, y, w, hh] = Hud.SLOT_RECT[s];
-      c.fillStyle = '#15120d'; c.fillRect(X + x, y, w, hh); c.strokeStyle = '#6a5a3a'; c.strokeRect(X + x + 0.5, y + 0.5, w - 1, hh - 1);
+      if (!art) { c.fillStyle = '#15120d'; c.fillRect(X + x, y, w, hh); c.strokeStyle = '#6a5a3a'; c.strokeRect(X + x + 0.5, y + 0.5, w - 1, hh - 1); }
       const it = h.body[s];
       if (it) { if (!reqOk(h, it, derive(h))) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); } drawIcon(c, it, X + x + 2, y + 2, w - 4, hh - 4); }
       ui.area(X + x, y, w, hh, () => { if (it) this.tapItem(it); }, () => { if (it) this.sel = it; });
     }
-    const gx = X + 15, gy = 222, cs = 29;
-    for (let yy = 0; yy < INV_H; yy++) for (let xx = 0; xx < INV_W; xx++) { c.fillStyle = '#15120d'; c.fillRect(gx + xx * cs, gy + yy * cs, cs - 1, cs - 1); }
+    const gx = X + 20, gy = 220, cs = 28;
+    if (!art) for (let yy = 0; yy < INV_H; yy++) for (let xx = 0; xx < INV_W; xx++) { c.fillStyle = '#15120d'; c.fillRect(gx + xx * cs, gy + yy * cs, cs - 1, cs - 1); }
     for (const e of h.inv) {
       const x = gx + e.x * cs, y = gy + e.y * cs, w = e.item.w * cs - 1, hh = e.item.h * cs - 1;
-      c.fillStyle = this.sel === e.item ? '#3a3a5a' : '#221d15'; c.fillRect(x, y, w, hh);
+      c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.6)' : art ? 'rgba(40,30,20,0.35)' : '#221d15'; c.fillRect(x, y, w, hh);
       if (!reqOk(h, e.item, derive(h))) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(x, y, w, hh); }
       drawIcon(c, e.item, x + 1, y + 1, w - 2, hh - 2);
       ui.area(x, y, w, hh, () => this.tapItem(e.item), () => { this.sel = e.item; });
     }
-    ui.text(`Gold: ${h.gold}`, X + 160, 345, { align: 'center', size: 11, color: '#e8c040' });
+    if (art) ui.text(`${h.gold}`, X + 64, 338, { size: 11, color: '#e8c040' }); else ui.text(`Gold: ${h.gold}`, X + 160, 345, { align: 'center', size: 11, color: '#e8c040' });
   }
   tapItem(it: Item) {
     const g = this.g();
@@ -370,7 +375,13 @@ export function skillLabel(g: Game, id: string): string {
   if (id.startsWith('staff:')) return `Staff ${SPELLS[id.slice(6)]?.name ?? ''}`;
   return SPELLS[id]?.name ?? id;
 }
-function orb(c: CanvasRenderingContext2D, cx: number, cy: number, frac: number, col: string) {
+function orb(c: CanvasRenderingContext2D, cx: number, cy: number, frac: number, col: string, artKey: string) {
+  const f0 = Math.max(0, Math.min(1, frac));
+  if (hasImg(artKey) && hasImg('ui/orb-empty')) {
+    drawImg(c, 'ui/orb-empty', cx - 56, cy - 56);
+    c.save(); c.beginPath(); c.rect(cx - 56, cy + 44 - 88 * f0, 112, 112); c.clip(); drawImg(c, artKey, cx - 56, cy - 56); c.restore();
+    return;
+  }
   const r = 50;
   c.fillStyle = '#0a0806'; c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.fill();
   c.save(); c.beginPath(); c.arc(cx, cy, r - 3, 0, Math.PI * 2); c.clip();
@@ -379,7 +390,21 @@ function orb(c: CanvasRenderingContext2D, cx: number, cy: number, frac: number, 
   c.restore();
   c.strokeStyle = '#8a7a52'; c.lineWidth = 3; c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.stroke();
 }
+/** Icon id in the CC0 item atlas; closest base when the exact item has no icon yet. */
+export function itemIconId(it: Item): string {
+  const n = it.name.toLowerCase();
+  const exact: Record<string, string> = { 'short sword': 'short_sword', buckler: 'buckler', 'short bow': 'short_bow', club: 'club', dagger: 'dagger', axe: 'axe', 'small axe': 'axe', mace: 'mace', cap: 'cap', rags: 'rags', cape: 'cape', 'leather armor': 'leather_armor', 'small shield': 'small_shield', ring: 'ring', gold: 'gold' };
+  if (exact[n]) return exact[n];
+  if (it.itype === 'ITYPE_GOLD') return 'gold';
+  if (it.misc.includes('MANA')) return 'potion_mana';
+  if (it.misc.includes('HEAL') || it.misc.includes('REJUV') || it.misc.startsWith('IMISC_ELIX')) return 'potion_healing';
+  if (it.misc.startsWith('IMISC_SCROLL')) return 'scroll';
+  if (it.misc === 'IMISC_BOOK') return 'book';
+  return ({ ITYPE_SWORD: 'short_sword', ITYPE_AXE: 'axe', ITYPE_MACE: 'mace', ITYPE_BOW: 'short_bow', ITYPE_STAFF: 'short_staff', ITYPE_SHIELD: 'small_shield', ITYPE_HELM: 'cap', ITYPE_LARMOR: 'leather_armor', ITYPE_MARMOR: 'leather_armor', ITYPE_HARMOR: 'leather_armor', ITYPE_RING: 'ring', ITYPE_AMULET: 'ring' } as Record<string, string>)[it.itype] ?? '';
+}
 export function drawIcon(c: CanvasRenderingContext2D, it: Item, x: number, y: number, w: number, h: number) {
+  const id = itemIconId(it);
+  if (id && drawFrameBox(c, id, x, y, w, h)) { if (it.magical) { c.strokeStyle = itemColor(it); c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1); } return; }
   const col = it.misc === 'IMISC_HEAL' || it.misc === 'IMISC_FULLHEAL' ? '#c02020' : it.misc === 'IMISC_MANA' || it.misc === 'IMISC_FULLMANA' ? '#2040d0'
     : it.misc === 'IMISC_REJUV' || it.misc === 'IMISC_FULLREJUV' ? '#a040c0' : it.misc.startsWith('IMISC_SCROLL') ? '#d8c8a0' : it.misc === 'IMISC_BOOK' ? '#6a3a2a'
     : it.misc.startsWith('IMISC_ELIX') ? '#e0a020' : '#8a8a8a';

@@ -16,7 +16,7 @@ canvas.width = VIEW_W; canvas.height = VIEW_H;
 const ui = new UI();
 const opts = (() => { try { return JSON.parse(localStorage.getItem('cot.options') ?? '') as { music: number; sfx: number }; } catch { return { music: 7, sfx: 7 }; } })();
 const audio = new Audio(opts.music, opts.sfx);
-void loadArt(import.meta.env.BASE_URL).then((assets) => { for (const a of assets) if (a.type !== 'image') audio.files[a.key] = `${import.meta.env.BASE_URL}art/${a.file}`; });
+void loadArt(import.meta.env.BASE_URL).then((assets) => { for (const a of assets) if (a.type === 'sfx' || a.type === 'music') audio.files[a.key] = `${import.meta.env.BASE_URL}art/${a.file}`; });
 
 let screen: Screen = 'title';
 let game: Game | null = null;
