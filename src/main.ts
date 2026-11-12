@@ -8,10 +8,11 @@ import { UI, type Box } from './ui';
 import { Audio } from './audio';
 import { art, loadArt, wantedGroups } from './art';
 import { ZoneTracker } from './zones';
-import { view } from './iso';
+import { view, worldZoom } from './iso';
 import { joystickVector } from './controls';
 import { T } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
+import { TAP_SLOP, HOLD_MS } from './touch';
 import { saveGame, loadGame, listHeroes, peekHero, deleteHero } from './save';
 import creditsText from '../CREDITS.md?raw';
 import { NAME_BOX, NAME_CANCEL, NAME_OK, cssRect, frontLayout, inputFontPx, isFormTarget } from './nameEntry';
@@ -39,10 +40,10 @@ let loadT = 0;
 const go = (s: Screen) => { screen = s; scr.t = 0; audio.play('ui_click'); if (s === 'menu' || s === 'title') audio.play('music_title'); };
 const startGame = (g: Game) => { game = g; hud.closeAll(); hud.menu = 'none'; screen = 'loading'; loadT = 0.6; audio.play(g.cur === 'town' ? 'music_town' : 'music_l1'); };
 const hud = new Hud(() => game!, {
-  save: () => { if (game) { saveGame(localStorage, game); game.say('Game saved'); } },
+  save: () => { if (game) { (hud.stow(), saveGame(localStorage, game)); game.say('Game saved'); } },
   load: () => { if (game) { const g = loadGame(localStorage, game.hero.name); if (g) startGame(g); else game.say('No saved game'); } },
   newGame: () => { game = null; go('menu'); },
-  quit: () => { if (game) saveGame(localStorage, game); game = null; go('menu'); },
+  quit: () => { if (game) (hud.stow(), saveGame(localStorage, game)); game = null; go('menu'); },
   setVolumes: (m, s) => { audio.setVolumes(m, s); localStorage.setItem('cot.options', JSON.stringify({ music: m, sfx: s })); },
   vol: () => [audio.musicVol, audio.sfxVol],
 });
@@ -85,7 +86,8 @@ function fit() {
   inset.l = parseFloat(cs.paddingLeft) || 0; inset.r = parseFloat(cs.paddingRight) || 0; inset.t = parseFloat(cs.paddingTop) || 0; inset.b = parseFloat(cs.paddingBottom) || 0;
   // Order 9: world zoom shows about D1's 640x352 play area (same area, the phone's aspect): on 844x390 that is ~698x323 world px.
   // The HUD and touch controls are drawn in css px, so they keep their size.
-  view.zoom = Math.max(1, Math.sqrt((W * H) / (640 * 352))); view.w = W / view.zoom; view.h = H / view.zoom;
+  // Order 10 U3: zoomed out 1.35x from that (between D1 and Diablo Immortal): ~1.35x the tiles across, hero ~70 px on 844x390.
+  view.zoom = worldZoom(W, H); view.w = W / view.zoom; view.h = H / view.zoom;
   hud.lay = { W, H, dpr, inset: { ...inset } };
 }
 addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 200)); fit();
@@ -111,26 +113,35 @@ function goFullscreen() {
 const buzz = (p: number | number[]) => { try { navigator.vibrate?.(p); } catch { /* unsupported */ } };
 
 // ---- multi-touch input ----
-interface Ptr { kind: 'joy' | 'press' | 'box' | 'world'; box?: Box | null; x0: number; y0: number; held: boolean; timer: number }
+interface Ptr { kind: 'joy' | 'press' | 'box' | 'world'; box?: Box | null; x0: number; y0: number; held: boolean; timer: number; scroll?: string; moved?: boolean; ly?: number; lx?: number }
 const ptrs = new Map<number, Ptr>();
 const css = (e: PointerEvent) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault(); audio.unlock(); goFullscreen();
   try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
   const p = css(e), b = ui.hit(p.x, p.y);
-  const ptr: Ptr = { kind: 'box', box: b, x0: p.x, y0: p.y, held: false, timer: 0 };
+  const ptr: Ptr = { kind: 'box', box: b, x0: p.x, y0: p.y, held: false, timer: 0, lx: p.x, ly: p.y };
+  hud.pointer = { x: p.x, y: p.y };
+  const reg = ui.scrollAt(p.x, p.y); // U4: a touch inside a list can become a drag-scroll
+  if (reg && !b?.down) { ptr.scroll = reg.key; hud.scrollStart(reg.key, e.timeStamp / 1000); }
   if (b?.down) { ptr.kind = 'press'; b.down(); }
   else if (!b && screen === 'game' && game && !game.dead && p.x < W / 2 && !hud.covers(p.x) && !hud.map) {
     ptr.kind = 'joy'; hud.joy = { ox: p.x, oy: p.y, tx: p.x, ty: p.y }; game.move = { x: 0, y: 0, mag: 0 };
   } else if (!b && screen === 'game') ptr.kind = 'world';
-  if (ptr.kind === 'box' && b?.hold) ptr.timer = window.setTimeout(() => { ptr.held = true; b.hold!(); buzz(10); }, 420);
+  if (ptr.kind === 'box' && b?.hold) ptr.timer = window.setTimeout(() => { if (ptr.moved) return; ptr.held = true; b.hold!(); buzz(10); }, HOLD_MS);
   ptrs.set(e.pointerId, ptr);
 });
 canvas.addEventListener('pointermove', (e) => {
   const ptr = ptrs.get(e.pointerId); if (!ptr) return;
   const p = css(e);
   if (ptr.kind === 'joy' && game && hud.joy) { hud.joy.tx = p.x; hud.joy.ty = p.y; game.move = joystickVector(hud.joy.ox, hud.joy.oy, p.x, p.y); }
-  else if (ptr.kind === 'box' && Math.hypot(p.x - ptr.x0, p.y - ptr.y0) > 14) clearTimeout(ptr.timer);
+  else if (ptr.kind === 'box') {
+    hud.pointer = { x: p.x, y: p.y };
+    if (ptr.held && hud.drag) { hud.moveDrag(p.x, p.y); return; } // U8: the item follows the finger
+    if (!ptr.moved && Math.hypot(p.x - ptr.x0, p.y - ptr.y0) >= TAP_SLOP) { ptr.moved = true; clearTimeout(ptr.timer); } // U4: a drag is never a tap
+    if (ptr.moved && ptr.scroll) hud.scrollDrag(ptr.scroll, p.x - (ptr.lx ?? p.x), p.y - (ptr.ly ?? p.y), e.timeStamp / 1000);
+    ptr.lx = p.x; ptr.ly = p.y;
+  }
 });
 const end = (e: PointerEvent, cancel: boolean) => {
   const ptr = ptrs.get(e.pointerId); if (!ptr) return;
@@ -138,8 +149,10 @@ const end = (e: PointerEvent, cancel: boolean) => {
   const p = css(e);
   if (ptr.kind === 'joy') { if (game) game.move = null; hud.joy = null; return; }
   if (ptr.kind === 'press') { ptr.box?.up?.(); return; }
-  if (cancel || ptr.held) return;
-  if (ptr.kind === 'box') { const b = ui.hit(p.x, p.y); if (b && b === ptr.box || b && ptr.box && b.tap === ptr.box.tap) b.tap?.(); else if (ptr.box && Math.hypot(p.x - ptr.x0, p.y - ptr.y0) < 14) ptr.box.tap?.(); return; }
+  if (ptr.scroll) hud.scrollEnd(ptr.scroll, e.timeStamp / 1000);
+  if (ptr.held && hud.drag) { if (cancel) hud.drag = null; else hud.endDrag(p.x, p.y); return; } // U8 drop (cancel = snap back)
+  if (cancel || ptr.held || ptr.moved) return;
+  if (ptr.kind === 'box') { const b = ui.hit(p.x, p.y); if (b && b === ptr.box || b && ptr.box && b.tap === ptr.box.tap) b.tap?.(); else if (ptr.box && Math.hypot(p.x - ptr.x0, p.y - ptr.y0) < TAP_SLOP) ptr.box.tap?.(); return; }
   if (ptr.kind === 'world' && game && screen === 'game' && !hud.covers(p.x)) {
     // tap-to-interact: monsters (soft-lock + attack), NPCs, items, objects, doors. Floor taps do nothing (no tap-to-move).
     const t = pickAt(game, p.x / view.zoom, p.y / view.zoom);

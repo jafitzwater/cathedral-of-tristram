@@ -9,6 +9,8 @@ export interface AnimInfo { n: number; ms: number; asset: string }
 export interface ArtManifest { version: number; groups: Record<string, string[]>; anims: Record<string, { kind: string; height: number; actions: Record<string, AnimInfo> }>; assets: ArtAsset[] }
 export interface Decoded { img: CanvasImageSource; close(): void }
 export type Loader = (url: string, signal: AbortSignal) => Promise<Decoded>;
+/** Post-decode pixel pass for one asset (same size, replaces the decoded image; Order 10 U5 wall brightening). */
+export type PostDecode = (d: Decoded, a: ArtAsset) => Promise<Decoded> | Decoded;
 
 export const MIB = 1024 * 1024;
 export const BUDGET_MIB = 32;
@@ -44,6 +46,8 @@ export class ArtStore {
   private pending = new Map<string, AbortController>();
   private want = new Set<string>();
   bytes = 0; peak = 0; loads = 0; releases = 0; errors = 0;
+  /** Post-decode passes by asset key; the pass runs while both copies (+ its pixel buffer) exist, counted in the peak. */
+  post = new Map<string, PostDecode>();
   constructor(private base: string, private loader: Loader) {}
   init(m: ArtManifest) {
     this.m = m;
@@ -68,9 +72,11 @@ export class ArtStore {
     const a = this.byKey.get(k)!, ac = new AbortController();
     this.pending.set(k, ac);
     try {
-      const d = await this.loader(`${this.base}art/${a.file}`, ac.signal);
+      let d = await this.loader(`${this.base}art/${a.file}`, ac.signal);
       const bytes = a.w * a.h * 4;
       this.bytes += bytes; this.peak = Math.max(this.peak, this.bytes);
+      const pp = this.post.get(k);
+      if (pp && !ac.signal.aborted) { this.peak = Math.max(this.peak, this.bytes + 2 * bytes); d = await pp(d, a); }
       if (ac.signal.aborted || !this.want.has(k)) { d.close(); this.bytes -= bytes; return; }
       this.res.set(k, { d, bytes }); this.loads++;
     } catch { if (!ac.signal.aborted) this.errors++; }
@@ -97,8 +103,45 @@ const browserLoader: Loader = async (url, signal) => {
   return { img, close: () => { img.src = ''; } };
 };
 export let art = new ArtStore('/', browserLoader);
+/**
+ * Order 10 U5: brighter, warmer Cathedral walls and pillars (Joseph: too dark, washed into the black). For the wall/column
+ * frames only (props untouched): +42% light, +15% contrast, warmer stone (red up, blue down), and a lighter rim on each
+ * frame's top edge (the top course) and on the vertical edges of corners and columns. Same-size, in place: no bigger atlas.
+ */
+export const WALL_LIGHT = 1.42, WALL_CONTRAST = 1.15, WALL_WARM: [number, number, number] = [1.1, 1.0, 0.86], WALL_RIM = 1.45;
+export interface Rect { x: number; y: number; w: number; h: number; sides: boolean }
+export function wallRects(a: ArtAsset): Rect[] {
+  return (a.frames ?? []).filter((f) => /^stone(Wall|Column)/.test(f.id)).map((f) => ({ x: f.x, y: f.y, w: f.w, h: f.h, sides: /Corner|Column/.test(f.id) }));
+}
+export function brightenWalls(px: Uint8ClampedArray, W: number, rects: Rect[]) {
+  for (const r of rects) {
+    const rim = new Uint8Array(r.w * r.h);
+    const A = (x: number, y: number) => px[((r.y + y) * W + r.x + x) * 4 + 3];
+    for (let x = 0; x < r.w; x++) { let y = 0; while (y < r.h && A(x, y) < 128) y++; for (let k = 0; k < 2 && y + k < r.h; k++) rim[(y + k) * r.w + x] = 1; }
+    if (r.sides) for (let y = 0; y < r.h; y++) {
+      let x = 0; while (x < r.w && A(x, y) < 128) x++; for (let k = 0; k < 2 && x + k < r.w; k++) rim[y * r.w + x + k] = 1;
+      x = r.w - 1; while (x >= 0 && A(x, y) < 128) x--; for (let k = 0; k < 2 && x - k >= 0; k++) rim[y * r.w + x - k] = 1;
+    }
+    for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+      const i = ((r.y + y) * W + r.x + x) * 4;
+      if (px[i + 3] === 0) continue;
+      const k = WALL_LIGHT * (rim[y * r.w + x] ? WALL_RIM : 1);
+      for (let c = 0; c < 3; c++) px[i + c] = (((px[i + c] / 255 - 0.5) * WALL_CONTRAST + 0.5) * 255) * k * WALL_WARM[c];
+    }
+  }
+}
+const browserWallPass: PostDecode = (d, a) => {
+  const cv = document.createElement('canvas'); cv.width = a.w; cv.height = a.h;
+  const cx = cv.getContext('2d', { willReadFrequently: true }); if (!cx) return d;
+  cx.drawImage(d.img, 0, 0);
+  const id = cx.getImageData(0, 0, a.w, a.h);
+  brightenWalls(id.data, a.w, wallRects(a));
+  cx.putImageData(id, 0, 0); d.close();
+  return { img: cv, close: () => { cv.width = 0; cv.height = 0; } };
+};
 export async function loadArt(base: string): Promise<ArtManifest | null> {
   art = new ArtStore(base, browserLoader);
+  art.post.set('tiles/walls-props', browserWallPass);
   try {
     const r = await fetch(`${base}art/manifest.json`);
     if (!r.ok) return null;

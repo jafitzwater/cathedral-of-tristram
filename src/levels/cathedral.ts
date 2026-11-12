@@ -9,6 +9,8 @@ import { L1_POOL } from '../data/monsters';
 import { T, at, setT, type LevelMap, type Obj, type Room } from './types';
 
 export const CELLS = 40, SUB = 2;
+/** Floor tiles per monster on L1. D1 is 30 (na/30, InitMonsters); Order 10 U12 raises the density for Joseph: 11 (about 2.7x, ~126 monsters) so a full clear (with +25% exp) reaches clvl 4 on average. */
+export const L1_TILES_PER_MON = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.L1_TPM ?? 11);
 export const L1_W = CELLS * SUB, L1_H = CELLS * SUB;
 const SHRINES = ['Mysterious', 'Hidden', 'Gloomy', 'Weird', 'Magical', 'Stone', 'Religious', 'Enchanted', 'Thaumaturgic', 'Fascinating',
   'Cryptic', 'Eldritch', 'Eerie', 'Divine', 'Holy', 'Sacred', 'Spiritual', 'Abandoned', 'Creepy', 'Quiet', 'Secluded', 'Ornate', 'Glimmering'];
@@ -199,8 +201,9 @@ function placeObjects(m: LevelMap, rng: Rng, start: Room, butcher: Room) {
 function placeMonsters(m: LevelMap, rng: Rng, start: Room, butcher: Room) {
   let floor = 0;
   for (const t of m.tiles) if (t === T.FLOOR) floor++;
-  // D1: about one monster per 30 floor tiles [TEMP]; none in the arrival room; Fallen Ones come in packs.
-  let n = Math.floor(floor / 30);
+  // D1 InitMonsters: one monster per 30 open tiles; Order 10 U12 (Joseph): denser L1 so a full clear reaches clvl 4 (see L1_TILES_PER_MON).
+  // None in the arrival room; Fallen Ones come in packs.
+  let n = Math.floor(floor / L1_TILES_PER_MON);
   const taken = new Set<number>();
   const ok = (x: number, y: number) => at(m, x, y) === T.FLOOR && !inRoom(start, x, y, 2) && !inRoom(butcher, x, y, 1) && !taken.has(y * m.w + x) && !m.objects.some((o) => o.x === x && o.y === y);
   while (n > 0) {

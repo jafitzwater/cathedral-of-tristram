@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { CLASSES, EXP_LEVELS, START_GOLD, baseLife, baseMana } from '../src/data/classes';
 import { BASE, PREFIXES, SUFFIXES, IDI, idxOf } from '../src/data/items';
-import { MONSTERS, L1_POOL, spHp, mtypeLevelOk } from '../src/data/monsters';
+import { MONSTERS, BUTCHER_D1, L1_POOL, spHp, mtypeLevelOk } from '../src/data/monsters';
 import { SPELLS, spellMana } from '../src/data/spells';
 
 const { warrior: w, rogue: r, sorcerer: s } = CLASSES;
@@ -35,7 +35,10 @@ assert.deepEqual([quality.power, quality.p1, quality.p2, quality.minlvl], ['IPL_
 // monsters (monstdat.cpp)
 assert.deepEqual([MONSTERS.zombie.hp, MONSTERS.zombie.ac, MONSTERS.zombie.exp, MONSTERS.zombie.toHit], [[4, 7], 5, 54, 10]);
 assert.deepEqual([MONSTERS.fallen.dmg, MONSTERS.skeleton.toHit, MONSTERS.scavenger.exp], [[1, 3], 20, 80]);
-assert.deepEqual([MONSTERS.butcher.hp[0], MONSTERS.butcher.mlvl, MONSTERS.butcher.exp, MONSTERS.butcher.ac], [110, 6, 1420, 50]);
+// D1 v1.09 single-player Butcher kept as BUTCHER_D1; the live one is the Order 10 U12 tune (Joseph override).
+assert.deepEqual([BUTCHER_D1.hp[0], BUTCHER_D1.mlvl, BUTCHER_D1.exp, BUTCHER_D1.ac, BUTCHER_D1.dmg, BUTCHER_D1.toHit, BUTCHER_D1.resFire], [110, 6, 1420, 50, [6, 12], 50, true]);
+assert.deepEqual([MONSTERS.butcher.hp[0], MONSTERS.butcher.mlvl, MONSTERS.butcher.ac, MONSTERS.butcher.dmg, MONSTERS.butcher.walkMul, MONSTERS.butcher.attackMul, MONSTERS.butcher.fireMul], [115, 18, 25, [4, 9], 1.25, 1.2, 0.7]);
+assert.equal(Math.floor(MONSTERS.butcher.exp * (1 + (18 - 4) / 10)), Math.floor(1420 * 1.2), 'the tuned kill pays what D1 pays at clvl 4');
 assert.equal(spHp(4), 2); assert.equal(spHp(1), 1); assert.equal(spHp(110, true), 110);
 for (const id of L1_POOL) assert.ok(mtypeLevelOk(MONSTERS[id], 1), id);
 assert.ok(!mtypeLevelOk({ minDlvl: 2, maxDlvl: 5 }, 1), 'Ghoul-tier types are not on L1');

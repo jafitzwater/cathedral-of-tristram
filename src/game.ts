@@ -3,6 +3,7 @@ import { CLASSES, type ClassId } from './data/classes';
 import { MONSTERS, spHp, type MonsterDef } from './data/monsters';
 import { SPELLS, SPELL_BY_D1, CASTABLE, spellMana } from './data/spells';
 import { BASE, IDI } from './data/items';
+import { SHRINE_TEXT } from './data/shrines';
 import { NPC_TEXT } from './data/npcs';
 import { findPath } from './path';
 import { DIRS, dirOf, type P } from './iso';
@@ -32,7 +33,7 @@ const ATTACK_TICKS: Record<ClassId, { melee: number; bow: number; cast: number }
 
 export type LevelId = 'town' | 'l1';
 export interface Actor { x: number; y: number; tx: number; ty: number; dir: number; path: P[]; prog: number; state: 'idle' | 'walk' | 'attack' | 'hit' | 'cast' | 'block' | 'dead'; t: number; stepT: number }
-export interface Mon extends Actor { uid: number; def: MonsterDef; hp: number; maxHp: number; alive: boolean; active: boolean; fleeT: number; spoke: boolean; dealt: boolean; deathT: number; flash: number }
+export interface Mon extends Actor { uid: number; def: MonsterDef; hp: number; maxHp: number; alive: boolean; active: boolean; fleeT: number; spoke: boolean; dealt: boolean; deathT: number; flash: number; staggerCd?: number }
 export interface GroundItem { item: Item; x: number; y: number }
 export interface Missile { kind: 'firebolt' | 'cbolt' | 'arrow' | 'hbolt' | 'lightning'; x: number; y: number; vx: number; vy: number; life: number; dmg: [number, number]; fire: [number, number]; light: [number, number]; toHit: number; wander?: number }
 export interface Level { id: LevelId; dlvl: number; map: LevelMap; explored: Uint8Array; monsters: Mon[]; items: GroundItem[]; corpses: P[] }
@@ -42,6 +43,9 @@ export type Target =
 export interface Stores { smith: Item[]; premium: { items: (Item | null)[]; level: number }; witch: Item[]; healer: Item[]; boy: Item | null; boyLevel: number }
 export interface Float { text: string; x: number; y: number; t: number; color: string }
 export type SfxEvent = string;
+
+/** Order 10 U12 (Joseph): +25% experience for Cathedral level 1 kills (D1: x1). */
+export const L1_EXP_BONUS = 1.25;
 
 export class Game {
   rng: Rng;
@@ -54,7 +58,7 @@ export class Game {
   stores!: Stores;
   portal: { x: number; y: number } | null = null; // dungeon-side town portal
   l1Seed: number;
-  msg = ''; msgT = 0;
+  msg = ''; msgT = 0; msgSub = '';
   floats: Float[] = [];
   missiles: Missile[] = [];
   sfx: SfxEvent[] = [];
@@ -85,7 +89,9 @@ export class Game {
 
   get level(): Level { return this.levels[this.cur]!; }
   refresh() { this.d = derive(this.hero); }
-  say(s: string, t = 2.5) { this.msg = s; this.msgT = t; }
+  say(s: string, t = 2.5, sub = '') { this.msg = s; this.msgT = t; this.msgSub = sub; }
+  /** U7: a shrine's D1 line with its plain-English effect underneath (again when a used shrine is tapped). */
+  sayShrine(name: string) { const t = SHRINE_TEXT[name]; if (t) this.say(t.say, 5, `${name} Shrine: ${t.effect}`); }
   float(text: string, x: number, y: number, color = '#fff') { this.floats.push({ text, x, y, t: 1, color }); }
 
   makeLevel(id: LevelId): Level {
@@ -469,7 +475,7 @@ export class Game {
       case 'item': if (p.tx === t.g.x && p.ty === t.g.y || near(t.g)) { p.path = []; this.target = null; this.pickGround(t.g); return true; } go(t.g, !this.tileWalk(t.g.x, t.g.y)); if (!p.path.length) go(t.g, true); return false;
       case 'obj': {
         const o = t.o;
-        if (o.used) { this.target = null; if (o.kind === 'portal') return false; return false; }
+        if (o.used) { this.target = null; if (o.kind === 'shrine' && o.shrine) this.sayShrine(o.shrine); return false; }
         if (near(o)) { p.path = []; this.target = null; if (o.kind === 'barrel' || o.kind === 'barrel_ex') { this.startAttack(o); return true; } this.operate(o); return true; }
         go(o, true); return false;
       }
@@ -507,7 +513,7 @@ export class Game {
   }
   elemental(m: Mon, kind: 'fire' | 'light' | 'magic', dam: number): number {
     const def = m.def;
-    if (kind === 'fire') return def.immuneFire ? 0 : def.resFire ? dam >> 2 : dam;
+    if (kind === 'fire') return def.immuneFire ? 0 : def.resFire ? (def.fireMul !== undefined ? Math.floor(dam * def.fireMul) : dam >> 2) : dam;
     if (kind === 'light') return def.resLight ? dam >> 2 : dam;
     return def.immuneMagic ? 0 : dam;
   }
@@ -518,6 +524,10 @@ export class Game {
     this.float(`${dam}`, m.x, m.y, '#ff8');
     this.sfx.push('hit');
     if (m.hp <= 0) { this.killMon(m); return; }
+    const sg = m.def.stagger; // Order 10 U12: the tuned Butcher flinches briefly on any hit (not again within cd)
+    if (sg && m.state !== 'hit' && !((m.staggerCd ?? 0) > 0) && !monsterStunned(dam, m.def.mlvl)) {
+      if (m.state !== 'attack') { m.state = 'hit'; m.t = sg.t; m.dealt = false; m.path = []; m.prog = 0; m.x = m.tx; m.y = m.ty; m.staggerCd = sg.cd; }
+    }
     if (monsterStunned(dam, m.def.mlvl)) { m.state = 'hit'; m.t = Math.max(1, m.def.frames[3]) * TICK; m.path = []; m.prog = 0; m.x = m.tx; m.y = m.ty; }
     if (m.def.ai === 'AI_FALLEN' && this.rng.int(2) === 0) m.fleeT = 2; // [TEMP] Fallen Ones run when hurt
   }
@@ -526,7 +536,7 @@ export class Game {
     this.level.corpses.push({ x: m.tx, y: m.ty });
     this.sfx.push(m.def.id === 'butcher' ? 'butcher_die' : 'mon_die');
     if (this.target?.kind === 'mon' && this.target.m === m) this.target = null;
-    const lvls = addExp(this.hero, killExp(m.def.exp, m.def.mlvl, this.hero.clvl));
+    const lvls = addExp(this.hero, Math.floor(killExp(m.def.exp, m.def.mlvl, this.hero.clvl) * (this.level.dlvl === 1 ? L1_EXP_BONUS : 1)));
     if (lvls) { this.say(`You have reached level ${this.hero.clvl}`); this.sfx.push('levelup'); }
     if (m.def.id === 'butcher') {
       this.drop(butcherCleaver(this.rng), m.tx, m.ty);
@@ -547,10 +557,12 @@ export class Game {
     lv.items.push({ item: it, x, y });
   }
   pickGround(g: GroundItem) {
-    if (pickUp(this.hero, g.item)) {
+    const where = pickUp(this.hero, g.item);
+    if (where) {
       this.level.items = this.level.items.filter((x) => x !== g);
       this.sfx.push(g.item.itype === 'ITYPE_GOLD' ? 'gold' : 'pickup');
-      this.say(g.item.itype === 'ITYPE_GOLD' ? `${g.item.gold} gold` : g.item.identified ? g.item.iname : g.item.name, 1.5);
+      const nm = g.item.identified ? g.item.iname : g.item.name;
+      this.say(g.item.itype === 'ITYPE_GOLD' ? `${g.item.gold} gold` : where === 'equip' ? `Equipped ${nm}` : nm, 1.5);
       this.refresh();
     } else this.say('I have no room');
   }
@@ -612,19 +624,40 @@ export class Game {
   }
 
   // ---------------- objects ----------------
+  /** U10 (Joseph's override of D1, where Pepin restores life only): full life AND full mana. */
+  pepinHeal() { this.refresh(); this.hero.hp = this.d.maxHp; this.hero.mana = this.d.maxMana; this.sfx.push('heal'); }
+  /** HP when the current barrel chain started (U2: a chain can't kill a hero who was above 30% HP). */
+  barrelChainHp = -1;
+  /**
+   * U2 (Joseph's override of D1's flat 8-16): an exploding barrel burns the hero for 20-25% of max HP, then fire resistance; and a
+   * barrel (or a chain of them) never kills a hero who was above 30% HP when it went off. Monsters still take D1's 1-4 fire.
+   */
+  barrelDamage(r: Rng): number {
+    const h = this.hero, max = this.d.maxHp;
+    let dam = Math.floor(max * (20 + r.int(6)) / 100);
+    dam = Math.max(1, Math.floor(dam * (100 - this.d.fr) / 100));
+    const start = this.barrelChainHp >= 0 ? this.barrelChainHp : h.hp;
+    if (start > 0.3 * max) dam = Math.min(dam, Math.max(0, Math.ceil(h.hp) - 1));
+    return dam;
+  }
   breakBarrel(o: Obj) {
     if (o.used) return;
+    const outer = this.barrelChainHp < 0;
+    if (outer) this.barrelChainHp = this.hero.hp;
+    try { this.breakBarrel0(o); } finally { if (outer) this.barrelChainHp = -1; }
+  }
+  private breakBarrel0(o: Obj) {
     o.used = true; this.sfx.push('barrel');
     const r = new Rng(o.seed);
     if (o.kind === 'barrel_ex') {
       // OBJ_BARRELEX: 1-4 fire damage to monsters and 8-16 to the player in the 3x3 around it.
       for (const m of this.level.monsters) if (m.alive && Math.abs(m.tx - o.x) <= 1 && Math.abs(m.ty - o.y) <= 1) this.hurtMon(m, this.elemental(m, 'fire', 1 + r.int(4)));
-      if (Math.abs(this.p.tx - o.x) <= 1 && Math.abs(this.p.ty - o.y) <= 1) this.hurtPlayer(Math.floor((8 + r.int(9)) * (100 - this.d.fr) / 100), 1);
+      if (Math.abs(this.p.tx - o.x) <= 1 && Math.abs(this.p.ty - o.y) <= 1) this.hurtPlayer(this.barrelDamage(r), 1);
       for (const b of this.level.map.objects) if (b.kind === 'barrel_ex' && !b.used && Math.abs(b.x - o.x) <= 1 && Math.abs(b.y - o.y) <= 1) this.breakBarrel(b);
       this.sfx.push('explode');
       return;
     }
-    if (o.var2 <= 1) this.drop(r.int(3) === 0 ? getItemAttrs(r, rndUseful(r), 1) : makeDrop(r, rndAllItems(r, 1), 2, 1), o.x, o.y);
+    if (o.var2 <= 1) this.drop(r.int(3) === 0 ? getItemAttrs(r, rndUseful(r, this.level.dlvl), 1) : makeDrop(r, rndAllItems(r, 1), 2, 1), o.x, o.y);
     if (o.var2 >= 8) this.spawnSkeleton(o.x, o.y);
   }
   spawnSkeleton(x: number, y: number) {
@@ -637,7 +670,7 @@ export class Game {
     switch (o.kind) {
       case 'chest1': case 'chest2': case 'chest3': {
         o.used = true; this.sfx.push('chest');
-        for (let i = 0; i < o.var1; i++) this.drop(o.var2 === 0 ? getItemAttrs(r, rndUseful(r), 1) : makeDrop(r, rndAllItems(r, 1), 2, 1), o.x, o.y);
+        for (let i = 0; i < o.var1; i++) this.drop(o.var2 === 0 ? getItemAttrs(r, rndUseful(r, this.level.dlvl), 1) : makeDrop(r, rndAllItems(r, 1), 2, 1), o.x, o.y);
         if (o.var1 === 0) this.say('The chest is empty', 1.5);
         break;
       }
@@ -658,34 +691,35 @@ export class Game {
     const h = this.hero, worn = BODY_SLOTS.map((s) => h.body[s]).filter((i): i is Item => !!i);
     const stats = ['str', 'mag', 'dex', 'vit'] as const;
     const learned = Object.keys(h.spells);
-    const spellUp = (id: string, txt: string) => { h.spells[id] = Math.min(15, (h.spells[id] ?? 0) + 2); const d = derive(h); h.manaPenalty += Math.floor(d.maxMana / 10); clampVitals(h); this.say(txt); };
+    const spellUp = (id: string) => { h.spells[id] = Math.min(15, (h.spells[id] ?? 0) + 2); const d = derive(h); h.manaPenalty += Math.floor(d.maxMana / 10); clampVitals(h); };
     this.sfx.push('shrine');
     switch (name) {
-      case 'Mysterious': { const k = stats[r.int(4)]; for (const s of stats) h.base[s] = Math.max(0, h.base[s] + (s === k ? 5 : -1)); this.say('Some are weakened as one grows strong'); break; }
-      case 'Hidden': { const dur = worn.filter((i) => i.maxDur && i.maxDur !== DUR_INDESTRUCTIBLE); if (dur.length) { const k = r.int(dur.length); dur.forEach((i, j) => { if (j === k) { i.maxDur = Math.max(1, i.maxDur - 10); i.dur = Math.min(i.dur, i.maxDur); } else { i.maxDur += 10; i.dur += 10; } }); } this.say('New strength is forged through destruction'); break; }
-      case 'Gloomy': for (const i of worn) { if (i.itype.endsWith('ARMOR') || i.itype === 'ITYPE_HELM' || i.itype === 'ITYPE_SHIELD') i.ac += 2; if (['ITYPE_SWORD', 'ITYPE_AXE', 'ITYPE_MACE', 'ITYPE_BOW', 'ITYPE_STAFF'].includes(i.itype)) i.maxDam = Math.max(i.minDam, i.maxDam - 1); } this.say('Those who defend seldom attack'); break;
-      case 'Weird': for (const i of worn) if (['ITYPE_SWORD', 'ITYPE_AXE', 'ITYPE_MACE', 'ITYPE_BOW', 'ITYPE_STAFF'].includes(i.itype)) i.maxDam++; this.say('The sword of justice is swift and sharp'); break;
-      case 'Magical': case 'Magical2': this.manaShield = true; this.say('While the spirit is vigilant the body thrives'); break;
-      case 'Stone': for (const i of allItems(h)) if (i.itype === 'ITYPE_STAFF') i.charges = i.maxCharges; this.say('The powers of mana refocused renews'); break;
-      case 'Religious': for (const i of allItems(h)) if (i.maxDur && i.maxDur !== DUR_INDESTRUCTIBLE) i.dur = i.maxDur; this.say('Time cannot diminish the power of steel'); break;
-      case 'Enchanted': if (learned.length) { const k = learned[r.int(learned.length)]; for (const s of learned) h.spells[s] = s === k ? Math.max(0, h.spells[s] - 1) : Math.min(15, h.spells[s] + 1); if (h.spells[k] === 0) delete h.spells[k]; } this.say('Magic is not always what it seems to be'); break;
-      case 'Thaumaturgic': for (const o of this.level.map.objects) if (o.kind.startsWith('chest')) o.used = false; this.say('What once was opened now is closed'); break;
-      case 'Fascinating': spellUp('firebolt', 'Intensity comes at the cost of wisdom'); break;
-      case 'Cryptic': h.mana = this.d.maxMana; for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; this.missiles.push({ kind: 'lightning', x: this.p.x, y: this.p.y, vx: Math.cos(a) * 10, vy: Math.sin(a) * 10, life: 0.5, dmg: [0, 0], fire: [0, 0], light: [1, 10], toHit: 100 }); } this.say('Arcane power brings destruction'); break;
-      case 'Eldritch': for (const i of allItems(h)) if (['IMISC_HEAL', 'IMISC_MANA', 'IMISC_FULLHEAL', 'IMISC_FULLMANA'].includes(i.misc)) { const full = i.misc.startsWith('IMISC_FULL'); const n = getItemAttrs(r, full ? IDI.FULLREJUV : IDI.REJUV, 1); Object.assign(i, { ...n, uid: i.uid, identified: true }); } this.say('Crimson and Azure become as the sun'); break;
-      case 'Eerie': h.base.mag = Math.min(CLASSES[h.cls].max.mag, h.base.mag + 2); this.say('Knowledge and wisdom at the cost of self'); break;
-      case 'Divine': { for (const idx of [IDI.FULLREJUV, IDI.FULLREJUV]) this.drop(getItemAttrs(r, idx, 1), this.p.tx, this.p.ty); const d = derive(h); h.hp = d.maxHp; h.mana = d.maxMana; this.say('Drink and be refreshed'); break; }
-      case 'Holy': this.phase(); this.say('Wherever you go, there you are'); break;
-      case 'Sacred': spellUp('charged_bolt', 'Energy comes at the cost of wisdom'); break;
-      case 'Spiritual': { let n = 0; while (n < 40 && autoPlace(h, goldItem(1))) n++; const golds = h.inv.filter((e) => e.item.itype === 'ITYPE_GOLD'); for (const g of golds) { h.inv = h.inv.filter((e) => e !== g); h.gold += 5 + r.int(5); } this.say('Riches abound when least expected'); break; }
-      case 'Abandoned': h.base.dex = Math.min(CLASSES[h.cls].max.dex, h.base.dex + 2); this.say('The hands of men may be guided by fate'); break;
-      case 'Creepy': h.base.str = Math.min(CLASSES[h.cls].max.str, h.base.str + 2); this.say('Strength is bolstered by heavenly faith'); break;
-      case 'Quiet': h.base.vit = Math.min(CLASSES[h.cls].max.vit, h.base.vit + 2); this.say('The essence of life flows from within'); break;
-      case 'Secluded': this.level.explored.fill(1); this.say('The way is made clear when viewed from above'); break;
-      case 'Ornate': spellUp('holy_bolt', 'Salvation comes at the cost of wisdom'); break;
-      case 'Glimmering': for (const i of allItems(h)) i.identified = true; this.say('Mysteries are revealed in the light of reason'); break;
-      default: this.say('Nothing happens');
+      case 'Mysterious': { const k = stats[r.int(4)]; for (const s of stats) h.base[s] = Math.max(0, h.base[s] + (s === k ? 5 : -1));  break; }
+      case 'Hidden': { const dur = worn.filter((i) => i.maxDur && i.maxDur !== DUR_INDESTRUCTIBLE); if (dur.length) { const k = r.int(dur.length); dur.forEach((i, j) => { if (j === k) { i.maxDur = Math.max(1, i.maxDur - 10); i.dur = Math.min(i.dur, i.maxDur); } else { i.maxDur += 10; i.dur += 10; } }); }  break; }
+      case 'Gloomy': for (const i of worn) { if (i.itype.endsWith('ARMOR') || i.itype === 'ITYPE_HELM' || i.itype === 'ITYPE_SHIELD') i.ac += 2; if (['ITYPE_SWORD', 'ITYPE_AXE', 'ITYPE_MACE', 'ITYPE_BOW', 'ITYPE_STAFF'].includes(i.itype)) i.maxDam = Math.max(i.minDam, i.maxDam - 1); }  break;
+      case 'Weird': for (const i of worn) if (['ITYPE_SWORD', 'ITYPE_AXE', 'ITYPE_MACE', 'ITYPE_BOW', 'ITYPE_STAFF'].includes(i.itype)) i.maxDam++;  break;
+      case 'Magical': case 'Magical2': this.manaShield = true;  break;
+      case 'Stone': for (const i of allItems(h)) if (i.itype === 'ITYPE_STAFF') i.charges = i.maxCharges;  break;
+      case 'Religious': for (const i of allItems(h)) if (i.maxDur && i.maxDur !== DUR_INDESTRUCTIBLE) i.dur = i.maxDur;  break;
+      case 'Enchanted': if (learned.length) { const k = learned[r.int(learned.length)]; for (const s of learned) h.spells[s] = s === k ? Math.max(0, h.spells[s] - 1) : Math.min(15, h.spells[s] + 1); if (h.spells[k] === 0) delete h.spells[k]; }  break;
+      case 'Thaumaturgic': for (const o of this.level.map.objects) if (o.kind.startsWith('chest')) o.used = false;  break;
+      case 'Fascinating': spellUp('firebolt'); break;
+      case 'Cryptic': h.mana = this.d.maxMana; for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; this.missiles.push({ kind: 'lightning', x: this.p.x, y: this.p.y, vx: Math.cos(a) * 10, vy: Math.sin(a) * 10, life: 0.5, dmg: [0, 0], fire: [0, 0], light: [1, 10], toHit: 100 }); }  break;
+      case 'Eldritch': for (const i of allItems(h)) if (['IMISC_HEAL', 'IMISC_MANA', 'IMISC_FULLHEAL', 'IMISC_FULLMANA'].includes(i.misc)) { const full = i.misc.startsWith('IMISC_FULL'); const n = getItemAttrs(r, full ? IDI.FULLREJUV : IDI.REJUV, 1); Object.assign(i, { ...n, uid: i.uid, identified: true }); }  break;
+      case 'Eerie': h.base.mag = Math.min(CLASSES[h.cls].max.mag, h.base.mag + 2);  break;
+      case 'Divine': { for (const idx of this.level.dlvl < 4 ? [IDI.FULLMANA, IDI.FULLHEAL] : [IDI.FULLREJUV, IDI.FULLREJUV]) this.drop(getItemAttrs(r, idx, 1), this.p.tx, this.p.ty); const d = derive(h); h.hp = d.maxHp; h.mana = d.maxMana;  break; }
+      case 'Holy': this.phase();  break;
+      case 'Sacred': spellUp('charged_bolt'); break;
+      case 'Spiritual': { let n = 0; while (n < 40 && autoPlace(h, goldItem(1))) n++; const golds = h.inv.filter((e) => e.item.itype === 'ITYPE_GOLD'); for (const g of golds) { h.inv = h.inv.filter((e) => e !== g); h.gold += 5 + r.int(5); }  break; }
+      case 'Abandoned': h.base.dex = Math.min(CLASSES[h.cls].max.dex, h.base.dex + 2);  break;
+      case 'Creepy': h.base.str = Math.min(CLASSES[h.cls].max.str, h.base.str + 2);  break;
+      case 'Quiet': h.base.vit = Math.min(CLASSES[h.cls].max.vit, h.base.vit + 2);  break;
+      case 'Secluded': this.level.explored.fill(1);  break;
+      case 'Ornate': spellUp('holy_bolt'); break;
+      case 'Glimmering': for (const i of allItems(h)) i.identified = true;  break;
+      default: this.say('Nothing happens'); this.refresh(); return;
     }
+    this.sayShrine(name);
     this.refresh(); clampVitals(h);
   }
 
@@ -694,7 +728,7 @@ export class Game {
     const tx = NPC_TEXT[n.id];
     this.dialog = { npc: n, text: tx.greet };
     this.sfx.push(`npc_${n.id}`);
-    if (n.id === 'pepin') { const d = derive(this.hero); this.hero.hp = d.maxHp; } // Pepin heals for free whenever you talk to him (D1)
+    if (n.id === 'pepin') this.pepinHeal(); // Pepin heals for free whenever you talk to him (D1); U10: life AND mana
     if (n.id === 'wounded') {
       this.dialog.text = tx.butcher;
       this.quests.butcher = 'active';
@@ -711,9 +745,10 @@ export class Game {
   updateMon(m: Mon, dt: number) {
     const p = this.p, def = m.def;
     m.flash = Math.max(0, m.flash - dt);
+    if (m.staggerCd) m.staggerCd = Math.max(0, m.staggerCd - dt);
     if (m.state === 'hit' || m.state === 'attack') {
       m.t -= dt;
-      if (m.state === 'attack' && !m.dealt && m.t <= def.frames[2] * TICK * 0.4) { m.dealt = true; this.resolveMonAttack(m); }
+      if (m.state === 'attack' && !m.dealt && m.t <= Math.max(8, def.frames[2]) * TICK * 0.4) { m.dealt = true; this.resolveMonAttack(m); }
       if (m.t <= 0) { m.state = 'idle'; m.dealt = false; }
       return;
     }
@@ -727,10 +762,10 @@ export class Game {
       m.spoke = true; this.speech = { text: def.quote ?? '', t: 3 }; this.sfx.push('fresh_meat');
     }
     if (m.fleeT > 0) m.fleeT -= dt;
-    const walkTime = Math.max(6, def.frames[1]) * TICK; // monstdat walk frames, one per tick [TEMP]
+    const walkTime = Math.max(6, def.frames[1]) * TICK * (def.walkMul ?? 1); // monstdat walk frames, one per tick [TEMP]
     if (m.prog === 0 && m.fleeT <= 0 && dist === 1 && this.adjacent({ x: m.tx, y: m.ty }, { x: p.tx, y: p.ty })) {
       m.path = []; m.dir = dirOf(p.tx - m.tx, p.ty - m.ty);
-      m.state = 'attack'; m.t = Math.max(8, def.frames[2]) * TICK; m.dealt = false;
+      m.state = 'attack'; m.t = Math.max(8, def.frames[2]) * TICK * (def.attackMul ?? 1); m.dealt = false;
       return;
     }
     if (m.prog === 0 && !m.path.length) {

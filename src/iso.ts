@@ -7,6 +7,9 @@ export const PANEL_H = 128; // D1 control panel height
 export const PLAY_H = VIEW_H - PANEL_H;
 /** Live world viewport in world px (Order 4: full-screen, set by main.ts on resize). zoom = css px per world px. */
 export const view = { w: 640, h: PLAY_H, zoom: 1 };
+/** Order 10 U3: the zoom out from Order 9's D1-area zoom (sqrt(W*H / 640x352), min 1). */
+export const ZOOM_OUT = 1.35;
+export function worldZoom(W: number, H: number) { return Math.max(1, Math.sqrt((W * H) / (640 * 352))) / ZOOM_OUT; }
 
 export interface P { x: number; y: number }
 

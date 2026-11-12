@@ -11,6 +11,8 @@ import { itemIconId } from './hud';
 import type { Actor, Game, Target } from './game';
 
 const LIGHT_R = 10;
+/** Order 10 U5: wall light gain over the floor's, and the walls' minimum ambient (the floor keeps 0.18). */
+export const WALL_LIT = 1.4, WALL_AMBIENT = 0.42;
 
 export function camera(g: Game) {
   const s = tileToScreen(g.p.x, g.p.y);
@@ -72,10 +74,12 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
       if (sx < -TILE_W || sx > view.w + TILE_W || sy < -TILE_H * 3 || sy > view.h + (wd ? WALL_PX + TILE_H : TILE_H * 2)) continue; // tall walls reach up from below the screen
       if (!town && !lv.explored[y * m.w + x]) continue;
       const lit = lightAt(x, y), seen = town ? 1 : Math.max(0.18, lit);
+      // U5: walls and pillars catch more light than the floor, with a higher ambient floor so they read as shapes past the light radius
+      const wseen = town ? 1 : Math.max(WALL_AMBIENT, Math.min(1, lit * WALL_LIT));
       c.globalAlpha = 1;
       // Order 6: Cathedral walls, doors, pillars and arches from the CC0 Kenney pieces (wall-facing pass in walls.ts)
       if (wd) {
-        const wt = wd[y * m.w + x], a = wallFade(x, y, g.p.x, g.p.y, hroom) * seen;
+        const wt = wd[y * m.w + x], a = wallFade(x, y, g.p.x, g.p.y, hroom) * wseen;
         if (t === T.WALL) {
           if (wt) { c.globalAlpha = a; for (const pc of wt.pieces) stack(pc.id, sx + (pc.dx ?? 0), sy + (pc.dy ?? 0)); c.globalAlpha = 1; }
           continue;
@@ -112,7 +116,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
         if (t === T.UP || t === T.DOWN) { c.fillStyle = `rgba(255,230,160,${0.6 * seen})`; c.font = '10px serif'; c.textAlign = 'center'; c.fillText(t === T.UP ? 'UP' : 'DOWN', sx, sy + 20); }
         if (t === T.WATER) { c.fillStyle = 'rgba(120,160,255,0.15)'; c.fillRect(sx - 6 + Math.sin(time + x) * 6, sy + 14, 12, 2); }
         const arch = wd?.[y * m.w + x]?.arch;
-        if (arch) { c.globalAlpha = wallFade(x, y, g.p.x, g.p.y, hroom) * seen; stack(`stoneWallArchway_${arch}`, sx, sy, plainAbove(arch)); c.globalAlpha = 1; }
+        if (arch) { c.globalAlpha = wallFade(x, y, g.p.x, g.p.y, hroom) * wseen; stack(`stoneWallArchway_${arch}`, sx, sy, plainAbove(arch)); c.globalAlpha = 1; }
       }
       if (t === T.DOOR) sprites.push({ t: { kind: 'door', x, y }, x: sx - 20, y: sy - 40, w: 40, h: 72, depth: x + y - 0.5 });
     }

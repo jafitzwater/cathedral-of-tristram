@@ -193,11 +193,45 @@ export function autoPlace(h: Hero, it: Item): boolean {
   return false;
 }
 export const isBeltable = (it: Item) => it.w === 1 && it.h === 1 && (it.misc.startsWith('IMISC_') && ['IMISC_HEAL', 'IMISC_FULLHEAL', 'IMISC_MANA', 'IMISC_FULLMANA', 'IMISC_REJUV', 'IMISC_FULLREJUV', 'IMISC_SCROLL', 'IMISC_SCROLLT'].includes(it.misc));
-/** Pick up: potions/scrolls go to the belt first when there is room (D1 v1.09 AutoPlace belt), else the grid. */
-export function pickUp(h: Hero, it: Item): boolean {
-  if (it.itype === 'ITYPE_GOLD') { h.gold += it.gold ?? 0; return true; }
-  if (isBeltable(it)) { const i = h.belt.indexOf(null); if (i >= 0) { h.belt[i] = it; return true; } }
-  return autoPlace(h, it);
+/**
+ * Pick up (or buy): U11 potions/scrolls go to the first empty belt cell, else the grid; U1 (Joseph's override of D1) a wearable
+ * item whose slot is empty is equipped at once when the requirements are met; otherwise the grid (D1 AutoPlace).
+ * Returns where it went (truthy) or false when there is no room.
+ */
+export function pickUp(h: Hero, it: Item): false | 'gold' | 'belt' | 'equip' | 'pack' {
+  if (it.itype === 'ITYPE_GOLD') { h.gold += it.gold ?? 0; return 'gold'; }
+  if (isBeltable(it)) { const i = h.belt.indexOf(null); if (i >= 0) { h.belt[i] = it; return 'belt'; } }
+  if (autoEquip(h, it)) return 'equip';
+  return autoPlace(h, it) ? 'pack' : false;
+}
+/** U1: the empty body slot an item may go into right now (null when none is empty or it would be illegal). */
+export function autoEquipSlot(h: Hero, it: Item): BodySlot | null {
+  if (!reqOk(h, it, derive(h))) return null;
+  const b = h.body, weaponIn = (i: Item | null) => !!i && i.itype !== 'ITYPE_SHIELD';
+  switch (it.loc) {
+    case 'ILOC_HELM': return b.head ? null : 'head';
+    case 'ILOC_AMULET': return b.amulet ? null : 'amulet';
+    case 'ILOC_ARMOR': return b.chest ? null : 'chest';
+    case 'ILOC_RING': return !b.ringL ? 'ringL' : !b.ringR ? 'ringR' : null;
+    case 'ILOC_TWOHAND': return !b.handL && !b.handR ? 'handL' : null;
+    case 'ILOC_ONEHAND': {
+      const twoHand = b.handL?.loc === 'ILOC_TWOHAND' || b.handR?.loc === 'ILOC_TWOHAND';
+      if (twoHand) return null;
+      if (it.itype === 'ITYPE_SHIELD') { // needs a free off-hand: no shield already, one hand empty
+        if (b.handL?.itype === 'ITYPE_SHIELD' || b.handR?.itype === 'ITYPE_SHIELD') return null;
+        return !b.handR ? 'handR' : !b.handL ? 'handL' : null;
+      }
+      if (weaponIn(b.handL) || weaponIn(b.handR)) return null; // one weapon at a time (D1)
+      return !b.handL ? 'handL' : !b.handR ? 'handR' : null;
+    }
+    default: return null;
+  }
+}
+export function autoEquip(h: Hero, it: Item): boolean {
+  const s = autoEquipSlot(h, it);
+  if (!s) return false;
+  h.body[s] = it; clampVitals(h);
+  return true;
 }
 export function removeItem(h: Hero, it: Item) {
   h.inv = h.inv.filter((e) => e.item !== it);

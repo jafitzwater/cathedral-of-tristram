@@ -9,6 +9,8 @@ import { BASE } from './data/items';
 import { VIEW_W } from './iso';
 import { T } from './levels/types';
 import { BODY_SLOTS, INV_W, INV_H, derive, equip, unequip, removeItem, pickUp, spendStat, reqOk, isBeltable, type BodySlot } from './player';
+import { dropItem, locate, compareItems, compareTarget, type Place } from './invops';
+import { Scroller } from './touch';
 import { itemPrice, sellPrice, boyPrice, repairCost, rechargeCost, IDENTIFY_COST, DUR_INDESTRUCTIBLE, type Item } from './itemgen';
 import { itemColor } from './render';
 import { drawFrameBox, drawImg } from './art';
@@ -48,7 +50,80 @@ export class Hud {
   lay: Layout = { W: 844, H: 390, dpr: 1, inset: { l: 0, r: 0, t: 0, b: 0 } };
   joy: JoyDraw | null = null;
   attackDown = false;
+  // ---- Order 10 touch state ----
+  /** U4: finger-drag scrollers by region key (store list, quest log); the spellbook swipes pages. */
+  scrollers = new Map<string, Scroller>();
+  private swipe = 0; private lastStep = 0;
+  /** U8: item held on the finger (press-and-hold drag), and D1's cursor item (swapped out by a drop, placed by the next tap). */
+  drag: { item: Item; x: number; y: number } | null = null;
+  carry: Item | null = null;
+  /** Last touch position (css px), set by main.ts on every pointer event. */
+  pointer = { x: 0, y: 0 };
   constructor(private g: () => Game, private hooks: HudHooks) {}
+
+  sc(key: string) { let s = this.scrollers.get(key); if (!s) { s = new Scroller(); this.scrollers.set(key, s); } return s; }
+  scrollStart(key: string, t: number) { this.swipe = 0; if (key !== 'spell') this.sc(key).start(t); }
+  /** Finger moved by (dx, dy) css px inside a scroll region. */
+  scrollDrag(key: string, dx: number, dy: number, t: number) {
+    const ps = this.ps().ps;
+    if (key === 'spell') { this.swipe += Math.abs(dx) > Math.abs(dy) ? dx : dy; return; }
+    this.sc(key).drag(dy / ps, t);
+  }
+  scrollEnd(key: string, t: number) {
+    if (key === 'spell') { // a swipe of 40 css px flips a page (finger left/up = next page)
+      if (Math.abs(this.swipe) >= 40) this.spellPage = Math.max(0, this.spellPage + (this.swipe < 0 ? 1 : -1));
+      this.swipe = 0; return;
+    }
+    this.sc(key).release(t);
+  }
+  toPS(x: number, y: number) { const { ps, ox, oy } = this.ps(); return { x: (x - ox) / ps, y: (y - oy) / ps }; }
+  /** U8: what lies under a finger (css px) for an item being dropped. */
+  targetAt(x: number, y: number, it: Item): Place {
+    const q = this.toPS(x, y), X = 320;
+    if (this.right === 'inv') {
+      for (const s of BODY_SLOTS) { const [sx, sy, w, hh] = Hud.SLOT_RECT[s]; if (q.x >= X + sx - 2 && q.x < X + sx + w + 2 && q.y >= sy - 2 && q.y < sy + hh + 2) return { kind: 'body', slot: s }; }
+      const G = Hud.GRID, gx = X + G.x, gy = G.y;
+      if (q.x >= gx - 4 && q.y >= gy - 4 && q.x < gx + INV_W * G.pitch + 4 && q.y < gy + INV_H * G.pitch + 4) {
+        // the finger holds the item by its middle
+        const cx = Math.round((q.x - gx) / G.pitch - it.w / 2), cy = Math.round((q.y - gy) / G.pitch - it.h / 2);
+        return { kind: 'inv', x: Math.max(0, Math.min(INV_W - it.w, cx)), y: Math.max(0, Math.min(INV_H - it.h, cy)) };
+      }
+      if (this.left === 'none') {
+        const bx = 24, by = 280, bc = 34;
+        if (q.y >= by - 4 && q.y < by + bc + 2 && q.x >= bx - 4 && q.x < bx + 8 * bc) return { kind: 'belt', i: Math.max(0, Math.min(7, Math.floor((q.x - bx) / bc))) };
+        if (q.x >= 16 && q.x < 24 + 8 * 34 + 8 && q.y >= 254 && q.y < 254 + 70) return { kind: 'none' }; // belt panel frame
+      }
+      if (q.x >= X && q.x < X + 320 && q.y >= 0 && q.y < PS_H) return { kind: 'none' }; // on the panel, not on a slot
+      if (this.left !== 'none' && q.x >= 0 && q.x < 320 && q.y >= 0 && q.y < PS_H) return { kind: 'none' };
+    }
+    return { kind: 'ground' };
+  }
+  beginDrag(it: Item) { if (this.carry) return; this.info = null; this.sel = null; this.drag = { item: it, x: this.pointer.x, y: this.pointer.y }; }
+  moveDrag(x: number, y: number) { if (this.drag) { this.drag.x = x; this.drag.y = y; } }
+  /** Release a held item: drop it on the slot under the finger (D1 swap to the cursor), on the ground outside the panel, or snap back. */
+  endDrag(x: number, y: number) {
+    const d = this.drag; if (!d) return;
+    this.drag = null;
+    this.dropOn(d.item, this.targetAt(x, y, d.item));
+  }
+  private dropOn(it: Item, t: Place) {
+    const g = this.g(), h = g.hero;
+    const wasCarry = this.carry === it;
+    const r = dropItem(h, it, t);
+    if (r.ground) g.drop(it, g.p.tx, g.p.ty);
+    if (r.ok) this.carry = r.carry; else if (!wasCarry) this.carry = this.carry ?? null; else this.carry = it;
+    if (!r.ok && r.msg) g.say(r.msg, 1.5);
+    g.refresh();
+  }
+  /** Tap with an item on the cursor: put it there (swapping what was there onto the cursor). */
+  placeCarry(t: Place) { if (this.carry) this.dropOn(this.carry, t); }
+  /** Never lose the cursor item: back into the pack/belt, else onto the ground (before saving or closing the panel). */
+  stow() {
+    const g = this.g?.(), it = this.carry; this.carry = null; this.drag = null;
+    if (!g || !it) return;
+    if (!pickUp(g.hero, it)) g.drop(it, g.p.tx, g.p.ty);
+    g.refresh();
+  }
 
   closeAll() { this.left = 'none'; this.right = 'none'; this.map = false; this.sel = null; this.info = null; }
   panelOpen() { return this.left !== 'none' || this.right !== 'none'; }
@@ -64,6 +139,9 @@ export class Hud {
   draw(ui: UI) {
     const g = this.g(), c = ui.c, { W, H } = this.lay;
     if (g.pendingPick && this.right !== 'inv') this.right = 'inv';
+    const now = performance.now() / 1000, dt = Math.min(0.05, Math.max(0, now - (this.lastStep || now))); this.lastStep = now;
+    for (const sc of this.scrollers.values()) sc.step(dt);
+    if (this.right !== 'inv' && (this.carry || this.drag)) this.stow();
     if (this.map) this.drawAutomap(ui);
     const overlay = this.menu !== 'none' || !!g.dialog || g.dead;
     if (!overlay) this.drawControls(ui);
@@ -81,6 +159,11 @@ export class Hud {
       if (this.menu !== 'none') this.drawMenu(ui);
       if (g.dead) this.drawDeath(ui);
       c.restore();
+    }
+    const held = this.drag?.item ?? this.carry;
+    if (held) { // U8: the item rides on the finger (css px)
+      const ps = this.ps().ps, pos = this.drag ?? this.pointer, w = (held.w * 29 - 2) * ps, hh = (held.h * 29 - 2) * ps;
+      c.globalAlpha = 0.85; drawIcon(c, held, pos.x - w / 2, pos.y - hh / 2, w, hh); c.globalAlpha = 1;
     }
   }
   closeBtn(ui: UI, x: number, y: number, fn: () => void) {
@@ -132,9 +215,11 @@ export class Hud {
     });
     // --- message line ---
     if (g.msgT > 0) {
-      c.font = '13px serif'; const tw = c.measureText(g.msg).width + 20;
-      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(W / 2 - tw / 2, Tp + 64, tw, 22);
+      c.font = '13px serif'; let tw = c.measureText(g.msg).width + 20;
+      if (g.msgSub) { c.font = '12px serif'; tw = Math.max(tw, c.measureText(g.msgSub).width + 20); }
+      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(W / 2 - tw / 2, Tp + 64, tw, g.msgSub ? 40 : 22);
       ui.text(g.msg, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
+      if (g.msgSub) ui.text(g.msgSub, W / 2, Tp + 94, { align: 'center', size: 12, color: '#a8c8ff' }); // U7: the plain-English effect
     } else if (g.pendingPick) ui.text(`Tap an item to ${g.pendingPick}`, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
     // --- joystick ---
     const j = this.joy;
@@ -264,12 +349,18 @@ export class Hud {
     ui.panel(0, 0, 320, PS_H);
     this.closeBtn(ui, 286, 4, () => { this.left = 'none'; });
     ui.text('Quest log', 160, 24, { align: 'center', size: 16, bold: true });
-    const q = g.quests.butcher;
-    if (q === 'inactive') ui.text('No active quests', 160, 70, { align: 'center' });
+    const q = g.quests.butcher, sc = this.sc('quest'), c = ui.c, top = 44, vh = PS_H - top - 8;
+    c.save(); c.beginPath(); c.rect(4, top, 312, vh); c.clip();
+    ui.beginScroll(4, top, 312, vh, 'quest'); // U4: finger-drag scrolling
+    let end = 0;
+    if (q === 'inactive') { ui.text('No active quests', 160, 70 - sc.pos, { align: 'center' }); end = 90; }
     else {
-      ui.text('The Butcher', 20, 70, { size: 14, color: q === 'done' ? '#7a7a7a' : '#e8c040' });
-      ui.wrap(q === 'done' ? 'The Butcher is dead. The cathedral is a little quieter.' : NPC_TEXT.wounded.butcher, 20, 94, 280, 16);
+      ui.text('The Butcher', 20, 70 - sc.pos, { size: 14, color: q === 'done' ? '#7a7a7a' : '#e8c040' });
+      end = ui.wrap(q === 'done' ? 'The Butcher is dead. The cathedral is a little quieter.' : NPC_TEXT.wounded.butcher, 20, 94 - sc.pos, 280, 16) + sc.pos;
     }
+    ui.area(4, top, 312, vh);
+    ui.endScroll(); c.restore();
+    sc.setMax(end - (top + vh));
   }
 
   // ---------- inventory (panel space, right): the CC0 frame's D1 slot boxes, 28 px cells on a 29 px pitch ----------
@@ -289,18 +380,22 @@ export class Hud {
         if (!reqOk(h, it, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); }
         drawIcon(c, it, X + x + 1, y + 1, w - 2, hh - 2);
       }
-      ui.area(X + x - 2, y - 2, w + 4, hh + 4, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
+      ui.area(X + x - 2, y - 2, w + 4, hh + 4, () => { if (this.carry) this.placeCarry({ kind: 'body', slot: s }); else if (it) this.tapItem(it); }, it ? () => this.beginDrag(it) : undefined);
     }
     const G = Hud.GRID, gx = X + G.x, gy = G.y;
+    // empty cells: a tap puts the cursor item there (U8)
+    for (let cy = 0; cy < INV_H; cy++) for (let cx = 0; cx < INV_W; cx++) {
+      ui.area(gx + cx * G.pitch, gy + cy * G.pitch, G.pitch, G.pitch, () => { const it = this.carry; if (it) this.placeCarry({ kind: 'inv', x: Math.min(cx, INV_W - it.w), y: Math.min(cy, INV_H - it.h) }); });
+    }
     for (const e of h.inv) {
       const x = gx + e.x * G.pitch, y = gy + e.y * G.pitch, w = (e.item.w - 1) * G.pitch + G.cell, hh = (e.item.h - 1) * G.pitch + G.cell;
       c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.8)' : 'rgba(40,34,24,0.9)'; c.fillRect(x, y, w, hh);
       if (!reqOk(h, e.item, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(x, y, w, hh); }
       drawIcon(c, e.item, x + 1, y + 1, w - 2, hh - 2);
-      ui.area(x - 1, y - 1, w + 2, hh + 2, () => this.tapItem(e.item), () => { this.info = e.item; });
+      ui.area(x - 1, y - 1, w + 2, hh + 2, () => { if (this.carry) this.placeCarry({ kind: 'inv', x: e.x, y: e.y }); else this.tapItem(e.item); }, () => this.beginDrag(e.item));
     }
     ui.text(`${h.gold}`, X + 78, 340, { size: 11, color: '#e8c040' });
-    if (this.sel) ui.text('Tap again to use / equip - hold for info', X + 300, 211, { align: 'right', size: 9, color: '#9a8a62' });
+    ui.text(this.carry ? 'Tap a slot to place it - outside the panel drops it' : 'Tap: details   Hold: move', X + 300, 211, { align: 'right', size: 9, color: '#9a8a62' });
     // the belt (8 slots, CC0 belt-slot frame) sits in the left half while the inventory is open
     if (this.left === 'none') {
       const bx = 24, by = 280, bc = 34;
@@ -312,17 +407,16 @@ export class Hud {
         if (this.sel && this.sel === it) { c.fillStyle = 'rgba(80,80,140,0.6)'; c.fillRect(x, by, bc - 2, bc - 2); }
         ui.text(`${i + 1}`, x + 5, by + 6, { size: 8, color: '#8a7a52' });
         if (it) drawIcon(c, it, x + 3, by + 3, bc - 8, bc - 8);
-        ui.area(x, by, bc - 2, bc - 2, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
+        ui.area(x, by, bc - 2, bc - 2, () => { if (this.carry) this.placeCarry({ kind: 'belt', i }); else if (it) this.tapItem(it); }, it ? () => this.beginDrag(it) : undefined);
       }
     }
   }
-  /** Tap = select; tap the selected item again = its main action (equip / unequip / use). */
+  /** U9: a tap opens the item's detail card at once (with U6's comparison when it fits an occupied slot). */
   tapItem(it: Item) {
     const g = this.g();
     if (g.pendingPick) { g.pickItem(it); return; }
-    if (this.sel !== it) { this.sel = it; return; }
-    this.sel = null;
-    this.primary(it);
+    if (this.carry) { this.placeCarry(locate(g.hero, it)); return; }
+    this.sel = it; this.info = it;
   }
   primary(it: Item) {
     const g = this.g(), h = g.hero;
@@ -333,34 +427,58 @@ export class Hud {
     else this.info = it;
     g.refresh();
   }
+  /** One item card (panel space); returns its height. `cmp` rows are drawn under the stats, green = better, red = worse. */
+  private card(ui: UI, it: Item, x: number, y: number, w: number, title: string | null, cmp: ReturnType<typeof compareItems> | null, btnRows: number) {
+    const g = this.g(), h = g.hero;
+    const lines = itemLines(it, h.clvl);
+    const top = title ? 18 : 0;
+    const hh = top + 40 + lines.length * 14 + (cmp && cmp.length ? 18 + cmp.length * 13 : 0) + btnRows * 42 + 6;
+    ui.panel(x, y, w, hh);
+    if (title) { ui.c.fillStyle = 'rgba(200,160,96,0.25)'; ui.c.fillRect(x + 2, y + 2, w - 4, 16); ui.text(title, x + w / 2, y + 11, { align: 'center', size: 10, bold: true, color: '#e8c040' }); }
+    ui.text(it.identified || !it.magical ? it.iname : it.name, x + w / 2 - 10, y + top + 18, { align: 'center', size: 13, bold: true, color: itemColor(it) });
+    lines.forEach(([t, col], i) => ui.text(t, x + w / 2, y + top + 38 + i * 14, { align: 'center', size: 11, color: col }));
+    if (cmp && cmp.length) {
+      const cy = y + top + 38 + lines.length * 14 + 4;
+      ui.text('vs equipped', x + w / 2, cy, { align: 'center', size: 9, color: '#9a8a62' });
+      cmp.forEach((r, i) => ui.text(`${r.label}: ${r.now}  (${r.cur})`, x + w / 2, cy + 14 + i * 13, { align: 'center', size: 10, color: r.better === null ? '#c8b890' : r.better ? '#50e050' : '#ff5050' }));
+    }
+    return hh;
+  }
   drawItemInfo(ui: UI, it: Item) {
     const g = this.g(), h = g.hero;
-    const x = 140, y = 30, w = 360;
-    const lines = itemLines(it, h.clvl);
-    const hh = 54 + lines.length * 15 + 50;
     ui.block(-1000, -1000, 4000, 4000);
-    ui.panel(x, y, w, hh);
-    this.closeBtn(ui, x + w - 34, y + 4, () => { this.info = null; });
-    ui.text(it.identified || !it.magical ? it.iname : it.name, x + w / 2 - 10, y + 20, { align: 'center', size: 13, bold: true, color: itemColor(it) });
-    lines.forEach(([s, col], i) => ui.text(s, x + w / 2, y + 44 + i * 15, { align: 'center', size: 11, color: col }));
-    const by = y + hh - 42;
     const worn = BODY_SLOTS.some((s) => h.body[s] === it);
     const inPack = h.inv.some((e) => e.item === it);
     const inBelt = h.belt.includes(it);
     const done = () => { g.refresh(); this.info = null; this.sel = null; };
     const btns: [string, () => void][] = [];
     if (worn) btns.push(['Unequip', () => { const e = unequip(h, it); if (e) g.say(e); done(); }]);
-    else if (it.loc !== 'ILOC_UNEQUIPABLE' && it.loc !== 'ILOC_BELT') btns.push(['Equip', () => { const e = equip(h, it); if (e) g.say(e); done(); }]);
-    if (usable(it)) btns.push(['Use', () => { g.useItem(it); done(); }]);
-    if (it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell] && SPELLS[SPELL_BY_D1[it.spell].id]?.targeted !== undefined) {
+    else if (it.loc !== 'ILOC_UNEQUIPABLE' && it.loc !== 'ILOC_BELT' && (inPack || inBelt)) btns.push(['Equip', () => { const e = equip(h, it); if (e) g.say(e); done(); }]);
+    if (usable(it) && (inPack || inBelt)) btns.push(['Use', () => { g.useItem(it); done(); }]);
+    if ((inPack || inBelt) && it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell] && SPELLS[SPELL_BY_D1[it.spell].id]?.targeted !== undefined) {
       const id = `scroll:${SPELL_BY_D1[it.spell].id}`;
       btns.push(['To slot', () => { const free = h.slots.indexOf(null); h.slots = assignSlot(h.slots, free >= 0 ? free : SLOT_COUNT - 1, id); g.say(`Scroll assigned to slot ${(free >= 0 ? free : SLOT_COUNT - 1) + 1}`); done(); }]);
     }
     if (inPack && isBeltable(it) && h.belt.includes(null)) btns.push(['To belt', () => { removeItem(h, it); h.belt[h.belt.indexOf(null)] = it; done(); }]);
     if (inBelt) btns.push(['To pack', () => { removeItem(h, it); if (!pickUpPack(h, it)) { h.belt[h.belt.indexOf(null)] = it; g.say('No room'); } done(); }]);
-    if (!g.dialog) btns.push(['Drop', () => { removeItem(h, it); g.drop(it, g.p.tx, g.p.ty); done(); }]);
-    const bw = Math.min(80, (w - 20) / btns.length - 6);
-    btns.forEach(([l, f], i) => ui.button(l, x + 10 + i * (bw + 6), by, bw, 34, f, { size: 12 }));
+    if (g.dialog && this.store === 'sell') { const e = this.storeList().find((q) => q.item === it); if (e) btns.push([`Sell ${e.price}`, () => { this.storeDo(it, e.price); done(); }]); }
+    if (!g.dialog && (worn || inPack || inBelt)) btns.push(['Drop', () => { removeItem(h, it); g.drop(it, g.p.tx, g.p.ty); done(); }]);
+    const cur = compareTarget(h, it);
+    const rows = Math.ceil(btns.length / 4);
+    let bx: number, by: number, bw: number;
+    if (cur) { // U6: the equipped item's card next to this one
+      const cw = 300, lh = this.card(ui, cur, 12, 16, cw, 'Equipped', null, 0);
+      const rh = this.card(ui, it, 328, 16, cw, null, compareItems(it, cur), rows);
+      void lh;
+      this.closeBtn(ui, 328 + cw - 34, 20, () => { this.info = null; });
+      bx = 338; by = 16 + rh - rows * 42 - 2; bw = cw - 20;
+    } else {
+      const cw = 360, hh = this.card(ui, it, 140, 30, cw, null, null, rows);
+      this.closeBtn(ui, 140 + cw - 34, 34, () => { this.info = null; });
+      bx = 150; by = 30 + hh - rows * 42 - 2; bw = cw - 20;
+    }
+    const per = Math.min(4, btns.length), w1 = Math.min(84, bw / Math.max(1, per) - 6);
+    btns.forEach(([l, f], i) => ui.button(l, bx + (i % 4) * (w1 + 6), by + Math.floor(i / 4) * 42, w1, 34, f, { size: 12 }));
   }
 
   // ---------- spellbook (panel space, right): CC0 two-page frame; left page = learned spells, right = staff + scrolls ----------
@@ -395,7 +513,9 @@ export class Hud {
         });
       });
     };
+    ui.beginScroll(X + 10, 40, 300, 190, 'spell'); // U4: swipe the pages with a finger
     page(learned, 28, 'Spells'); page(carried, 176, 'Staff & scrolls');
+    ui.endScroll();
     if (!learned.length && !carried.length) ui.wrap('No spells yet. Read books, or carry scrolls or a staff.', X + 24, 214, 120, 13, { size: 10, color: '#9a8a62' });
     // slot row (Order 4 assignment flow) in the pages' empty lower half
     const sel = this.spellSel ? [...learned, ...carried].find((e) => e.id === this.spellSel) : null;
@@ -436,8 +556,8 @@ export class Hud {
     const x = 60, y = 16, w = 520, hh = 330;
     ui.panel(x, y, w, hh);
     ui.text(n.name, x + w / 2, y + 20, { align: 'center', size: 15, bold: true, color: '#e8c040' });
-    const close = () => { g.dialog = null; this.store = 'menu'; this.pick = null; this.scroll = 0; };
-    const back = () => { this.store = 'menu'; this.pick = null; this.scroll = 0; };
+    const close = () => { g.dialog = null; this.store = 'menu'; this.pick = null; this.scroll = 0; this.sc('store').pos = 0; };
+    const back = () => { this.store = 'menu'; this.pick = null; this.scroll = 0; this.sc('store').pos = 0; };
     this.closeBtn(ui, x + w - 36, y + 6, close);
     if (this.store === 'menu' || this.store === 'talk') {
       const ty = ui.wrap(this.store === 'talk' ? dlg.text : tx.greet, x + 30, y + 52, w - 60, 16, { align: 'center' });
@@ -448,21 +568,35 @@ export class Hud {
       return;
     }
     const list = this.storeList();
-    const per = 7;
-    this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, list.length - per)));
+    const per = 7, RH = 34, top = y + 58, vh = per * RH;
+    const sc = this.sc('store'); sc.setMax(list.length * RH - vh);
     ui.text(storeTitle(this.store), x + w / 2, y + 44, { align: 'center', size: 13 });
     if (!list.length) ui.text('You have nothing for this.', x + w / 2, y + 120, { align: 'center' });
-    list.slice(this.scroll, this.scroll + per).forEach((e, i) => {
-      const yy = y + 62 + i * 34;
+    // U4: the list scrolls with a finger drag (momentum; a drag never buys), the arrows still page it
+    const c = ui.c;
+    c.save(); c.beginPath(); c.rect(x + 4, top, w - 8, vh); c.clip();
+    ui.beginScroll(x + 4, top, w - 8, vh, 'store');
+    const first = Math.max(0, Math.floor(sc.pos / RH)), last = Math.min(list.length, Math.ceil((sc.pos + vh) / RH));
+    for (let i = first; i < last; i++) {
+      const e = list[i], yy = top + 4 + i * RH - sc.pos;
       const ok = this.store === 'buy' || this.store === 'premium' || this.store === 'wirt' ? reqOk(h, e.item, derive(h)) : true;
-      ui.button('', x + 16, yy, w - 32, 30, () => { this.pick = e.item; }, { on: this.pick === e.item });
+      const on = this.pick === e.item;
+      c.fillStyle = on ? '#5a4a2a' : '#3a3226'; c.fillRect(x + 16, yy, w - 32, 30);
+      c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(x + 16.5, yy + 0.5, w - 33, 29);
+      const y0 = Math.max(top, yy), y1 = Math.min(top + vh, yy + 30);
+      if (y1 > y0) ui.area(x + 16, y0, w - 32, y1 - y0, () => { this.pick = e.item; });
       ui.text(e.item.identified || !e.item.magical ? e.item.iname : e.item.name, x + 26, yy + 10, { size: 12, color: ok ? itemColor(e.item) : '#d04040' });
       ui.text(itemLines(e.item, h.clvl).slice(0, 2).map((l) => l[0]).join('   '), x + 26, yy + 23, { size: 9, color: '#9a8a62' });
       ui.text(`${e.price}`, x + w - 28, yy + 15, { size: 12, align: 'right', color: '#e8c040' });
-    });
+    }
+    ui.endScroll();
+    c.restore();
     if (list.length > per) {
-      ui.button('▲', x + w - 46, y + 36, 30, 22, () => { this.scroll = Math.max(0, this.scroll - per); });
-      ui.button('▼', x + w - 46, y + hh - 62, 30, 22, () => { this.scroll += per; });
+      ui.button('▲', x + w - 46, y + 36, 30, 22, () => { sc.vel = 0; sc.pos = Math.max(0, sc.pos - vh); });
+      ui.button('▼', x + w - 46, y + hh - 62, 30, 22, () => { sc.vel = 0; sc.pos = Math.min(sc.max, sc.pos + vh); });
+      // scroll bar
+      const bh = Math.max(20, vh * vh / (list.length * RH)), byy = top + (vh - bh) * (sc.max ? sc.pos / sc.max : 0);
+      c.fillStyle = 'rgba(200,160,96,0.5)'; c.fillRect(x + w - 10, byy, 4, bh);
     }
     const by = y + hh - 34;
     const sel = list.find((e) => e.item === this.pick);
@@ -480,13 +614,13 @@ export class Hud {
       cain: ['talk', 'identify'], wirt: ['talk', 'wirt'],
     };
     const mode = map[id]?.[i];
-    if (id === 'pepin' && i === 1) { const d = derive(g.hero); g.hero.hp = d.maxHp; dlg.text = 'There. You are healed.'; this.store = 'talk'; return; }
+    if (id === 'pepin' && i === 1) { g.pepinHeal(); dlg.text = 'There. You are healed.'; this.store = 'talk'; return; }
     if (id === 'wirt' && mode === 'wirt') {
       if (!g.stores.boy) { dlg.text = 'I have nothing for you right now. Come back later.'; this.store = 'talk'; return; }
       if (g.hero.gold < 50) { dlg.text = 'Looking costs fifty gold. Come back when you have it.'; this.store = 'talk'; return; }
       g.hero.gold -= 50;
     }
-    if (mode) { this.store = mode; this.scroll = 0; this.pick = null; }
+    if (mode) { this.store = mode; this.scroll = 0; this.sc('store').pos = 0; this.pick = null; }
   }
   storeList(): { item: Item; price: number }[] {
     const g = this.g(), h = g.hero, st = g.stores, npc = g.dialog!.npc.id;
@@ -515,7 +649,9 @@ export class Hud {
       case 'buy': case 'premium': case 'wirt': {
         if (h.gold < price) { g.say('You do not have enough gold'); g.sfx.push('nope'); return; }
         const copy: Item = JSON.parse(JSON.stringify(it));
-        if (!pickUpPack(h, copy) && !pickUp(h, copy)) { g.say('You do not have enough room in inventory'); return; }
+        const where = pickUp(h, copy); // U11 belt first for potions/scrolls, U1 auto-equip into an empty slot, else the pack
+        if (!where) { g.say('You do not have enough room in inventory'); return; }
+        if (where === 'equip') g.say(`Equipped ${copy.identified || !copy.magical ? copy.iname : copy.name}`, 1.5);
         h.gold -= price; g.sfx.push('gold');
         if (this.store === 'premium') st.premium.items[st.premium.items.indexOf(it)] = null;
         else if (this.store === 'wirt') st.boy = null;

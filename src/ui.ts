@@ -1,12 +1,29 @@
 // Immediate-mode touch UI: widgets register hit boxes while drawing; taps are routed to the top-most box.
 export interface Box { x: number; y: number; w: number; h: number; tap?: () => void; hold?: () => void; down?: () => void; up?: () => void }
+export interface Region { x: number; y: number; w: number; h: number; key: string; start: number; end: number }
 export class UI {
   boxes: Box[] = [];
+  /** Order 10 U4: finger-drag scroll regions (css px); boxes registered inside a region scroll with it. */
+  regions: Region[] = [];
+  private open: Region | null = null;
   c!: CanvasRenderingContext2D;
   dpr = 1; // backing px per css px; boxes are stored in css px whatever transform is active
-  begin(c: CanvasRenderingContext2D, dpr = 1) { this.c = c; this.boxes = []; this.dpr = dpr; }
+  begin(c: CanvasRenderingContext2D, dpr = 1) { this.c = c; this.boxes = []; this.regions = []; this.open = null; this.dpr = dpr; }
   hit(x: number, y: number): Box | null {
     for (let i = this.boxes.length - 1; i >= 0; i--) { const b = this.boxes[i]; if (x >= b.x && y >= b.y && x < b.x + b.w && y < b.y + b.h) return b; }
+    return null;
+  }
+  /** Index of a box in draw order (-1 if none). */
+  indexOf(b: Box | null) { return b ? this.boxes.indexOf(b) : -1; }
+  beginScroll(x: number, y: number, w: number, h: number, key: string) { this.open = { ...this.css(x, y, w, h), key, start: this.boxes.length, end: -1 }; this.regions.push(this.open); }
+  endScroll() { if (this.open) { this.open.end = this.boxes.length; this.open = null; } }
+  /** The scroll region under a touch, unless something drawn after the region (a popup) covers that point. */
+  scrollAt(x: number, y: number): Region | null {
+    const b = this.hit(x, y), bi = this.indexOf(b);
+    for (let i = this.regions.length - 1; i >= 0; i--) {
+      const r = this.regions[i];
+      if (x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h && (bi < 0 || bi < r.end)) return r;
+    }
     return null;
   }
   private css(x: number, y: number, w: number, h: number) {

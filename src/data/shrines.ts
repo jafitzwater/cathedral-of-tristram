@@ -1,0 +1,27 @@
+// Order 10 U7: D1 v1.09 shrines possible on Cathedral level 1 in single player (objects.cpp OperateShrine; shrinemin = 1 for
+// all of these; Spooky and Tainted are multiplayer-only). `say` is D1's flavour line, `effect` the plain-English effect.
+export const SHRINE_TEXT: Record<string, { say: string; effect: string }> = {
+  Mysterious: { say: 'Some are weakened as one grows strong', effect: 'Random stat +5, the others -1' },
+  Hidden: { say: 'New strength is forged through destruction', effect: 'Durability +10 on equipped items, one -10' },
+  Gloomy: { say: 'Those who defend seldom attack', effect: 'Worn armor +2 AC, weapon max damage -1' },
+  Weird: { say: 'The sword of justice is swift and sharp', effect: 'Weapon max damage +1' },
+  Magical: { say: 'While the spirit is vigilant the body thrives', effect: 'Casts Mana Shield on you' },
+  Stone: { say: 'The powers of mana refocused renews', effect: 'Staff charges fully restored' },
+  Religious: { say: 'Time cannot diminish the power of steel', effect: 'All your items fully repaired' },
+  Enchanted: { say: 'Magic is not always what it seems to be', effect: 'Known spells +1 level, one random spell -1' },
+  Thaumaturgic: { say: 'What once was opened now is closed', effect: 'Opened chests on this level refill' },
+  Fascinating: { say: 'Intensity comes at the cost of wisdom', effect: 'Firebolt +2 levels, max mana -10%' },
+  Cryptic: { say: 'Arcane power brings destruction', effect: 'Full mana, and a lightning nova around you' },
+  Eldritch: { say: 'Crimson and Azure become as the sun', effect: 'Healing and mana potions become rejuvenation' },
+  Eerie: { say: 'Knowledge and wisdom at the cost of self', effect: 'Magic +2' },
+  Divine: { say: 'Drink and be refreshed', effect: 'Full life and mana, plus Full Healing and Full Mana potions' },
+  Holy: { say: 'Wherever you go, there you are', effect: 'Phases you to a random spot nearby' },
+  Sacred: { say: 'Energy comes at the cost of wisdom', effect: 'Charged Bolt +2 levels, max mana -10%' },
+  Spiritual: { say: 'Riches abound when least expected', effect: 'Empty inventory cells fill with gold' },
+  Abandoned: { say: 'The hands of men may be guided by fate', effect: 'Dexterity +2' },
+  Creepy: { say: 'Strength is bolstered by heavenly faith', effect: 'Strength +2' },
+  Quiet: { say: 'The essence of life flows from within', effect: 'Vitality +2' },
+  Secluded: { say: 'The way is made clear when viewed from above', effect: 'Reveals the map of this level' },
+  Ornate: { say: 'Salvation comes at the cost of wisdom', effect: 'Holy Bolt +2 levels, max mana -10%' },
+  Glimmering: { say: 'Mysteries are revealed in the light of reason', effect: 'Identifies all your items' },
+};

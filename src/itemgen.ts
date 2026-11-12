@@ -224,10 +224,11 @@ export function rndAllItems(rng: Rng, dlvl: number): number {
   BASE.forEach((b, i) => { if (i && dropable(b) && 2 * dlvl >= b.iMinMLvl) l.push(i); });
   return l[rng.int(l.length)];
 }
-/** CreateRndUseful: [TEMP] healing potion 50%, mana potion 25%, town portal scroll 25%. */
-export function rndUseful(rng: Rng): number {
-  const r = rng.int(4);
-  return r < 2 ? IDI.HEAL : r === 2 ? IDI.MANA : IDI.PORTAL;
+/** SetupAllUseful (D1 v1.09): healing or mana potion 50/50; below dlvl 1 one in three becomes a town portal scroll. (Order 10 U12 audit: was 50/25/25.) */
+export function rndUseful(rng: Rng, lvl = 1): number {
+  let idx = rng.int(2) ? IDI.HEAL : IDI.MANA;
+  if (lvl > 1 && rng.int(3) === 0) idx = IDI.PORTAL;
+  return idx;
 }
 export function makeDrop(rng: Rng, idx: number, ilvl: number, dlvl: number, unique = false): Item {
   if (idx === 0) return goldItem(goldRoll(rng, dlvl));
