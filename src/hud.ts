@@ -11,7 +11,7 @@ import { T } from './levels/types';
 import { BODY_SLOTS, INV_W, INV_H, derive, equip, unequip, removeItem, pickUp, spendStat, reqOk, isBeltable, type BodySlot } from './player';
 import { itemPrice, sellPrice, boyPrice, repairCost, rechargeCost, IDENTIFY_COST, DUR_INDESTRUCTIBLE, type Item } from './itemgen';
 import { itemColor } from './render';
-import { drawFrameBox } from './art';
+import { drawFrameBox, drawImg } from './art';
 import { assignSlot, knob, SLOT_COUNT, JOY_RADIUS } from './controls';
 import type { Game } from './game';
 import type { UI } from './ui';
@@ -94,22 +94,21 @@ export class Hud {
   drawControls(ui: UI) {
     const g = this.g(), c = ui.c, h = g.hero, d = g.d, { W, H, inset } = this.lay;
     const L = inset.l + 10, Tp = inset.t + 8, R = W - inset.r - 10;
-    // --- status: level badge + life/mana/XP bars (top-left) ---
+    // --- status: level badge + life/mana orbs (CC0 orb art) + numbers + XP bar (top-left) ---
     const bw = Math.min(190, W * 0.24);
     c.fillStyle = 'rgba(10,8,6,0.75)'; c.fillRect(L - 4, Tp - 4, bw + 52, 52);
     c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(L - 3.5, Tp - 3.5, bw + 51, 51);
     c.fillStyle = '#2a1a10'; c.beginPath(); c.arc(L + 18, Tp + 22, 18, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#c8a060'; c.lineWidth = 2; c.stroke();
     ui.text(`${h.clvl}`, L + 18, Tp + 23, { align: 'center', size: 16, bold: true, color: '#e8c040' });
-    const bar = (y: number, hgt: number, f: number, col: string, label: string) => {
-      c.fillStyle = '#1a0e08'; c.fillRect(L + 42, y, bw, hgt);
-      c.fillStyle = col; c.fillRect(L + 42, y, bw * Math.max(0, Math.min(1, f)), hgt);
-      c.strokeStyle = '#5a4a2a'; c.strokeRect(L + 42.5, y + 0.5, bw - 1, hgt - 1);
-      if (label) ui.text(label, L + 42 + bw / 2, y + hgt / 2 + 1, { align: 'center', size: 10, color: '#fff' });
-    };
-    bar(Tp, 16, h.hp / Math.max(1, d.maxHp), g.manaShield ? '#8050c0' : '#a01010', `${Math.ceil(h.hp)} / ${d.maxHp}`);
-    bar(Tp + 19, 13, d.maxMana ? h.mana / d.maxMana : 0, '#2040c0', `${Math.floor(h.mana)} / ${d.maxMana}`);
-    const lo = EXP_LEVELS[h.clvl - 1] ?? 0, hi = EXP_LEVELS[h.clvl] ?? lo + 1;
-    bar(Tp + 35, 6, h.clvl >= 50 ? 1 : (h.exp - lo) / (hi - lo), '#c8a040', '');
+    const OD = 44, lf = h.hp / Math.max(1, d.maxHp), mf = d.maxMana ? h.mana / d.maxMana : 0;
+    orb(c, 'ui/orb-life', L + 40, Tp, OD, lf, g.manaShield ? '#8050c0' : '#a01010');
+    orb(c, 'ui/orb-mana', L + 40 + OD + 2, Tp, OD, mf, '#2040c0');
+    const tx = L + 40 + OD * 2 + 8, tw = Math.max(30, L + bw + 46 - tx);
+    ui.text(`${Math.ceil(h.hp)}/${d.maxHp}`, tx, Tp + 8, { size: 11, bold: true, color: g.manaShield ? '#c8a0ff' : '#ff8070' });
+    ui.text(`${Math.floor(h.mana)}/${d.maxMana}`, tx, Tp + 23, { size: 11, bold: true, color: '#90a8ff' });
+    const lo = EXP_LEVELS[h.clvl - 1] ?? 0, hi = EXP_LEVELS[h.clvl] ?? lo + 1, xf = h.clvl >= 50 ? 1 : (h.exp - lo) / (hi - lo);
+    c.fillStyle = '#1a0e08'; c.fillRect(tx, Tp + 35, tw, 6); c.fillStyle = '#c8a040'; c.fillRect(tx, Tp + 35, tw * Math.max(0, Math.min(1, xf)), 6);
+    c.strokeStyle = '#5a4a2a'; c.strokeRect(tx + 0.5, Tp + 35.5, tw - 1, 5);
     ui.area(L - 4, Tp - 4, bw + 52, 52, () => { this.left = this.left === 'char' ? 'none' : 'char'; });
     if (h.statPts) { c.fillStyle = '#e8c040'; c.beginPath(); c.arc(L + 32, Tp + 6, 6, 0, Math.PI * 2); c.fill(); ui.text('+', L + 32, Tp + 7, { align: 'center', size: 11, bold: true, color: '#000' }); }
     // --- minimap (top-right, tap = full automap) + icon buttons ---
@@ -228,28 +227,37 @@ export class Hud {
     if (it) { g.useItem(it); g.refresh(); } else g.say(life ? 'No healing potion in the belt' : 'No mana potion in the belt', 1.5);
   }
 
-  // ---------- char sheet (panel space, left) ----------
+  // ---------- char sheet (panel space, left): live values on the empty CC0 panel frame ----------
+  /** Panel art (empty frame) or, while it loads, the plain code panel. Always blocks taps underneath. */
+  artPanel(ui: UI, key: string, x: number) {
+    if (!drawImg(ui.c, key, x, 0, 320, PS_H)) ui.panel(x, 0, 320, PS_H); else ui.block(x, 0, 320, PS_H);
+  }
   drawChar(ui: UI) {
-    const g = this.g(), h = g.hero, d = derive(h);
-    ui.panel(0, 0, 320, PS_H);
-    this.closeBtn(ui, 286, 4, () => { this.left = 'none'; });
-    ui.text(h.name, 20, 22, { size: 15, bold: true }); ui.text(CLASSES[h.cls].name, 190, 22, { size: 13 });
-    ui.text(`Level ${h.clvl}`, 20, 46); ui.text(`Experience ${h.exp}`, 120, 46);
-    ui.text(`Next level ${h.clvl >= 50 ? 'None' : EXP_LEVELS[h.clvl]}`, 120, 64);
-    const rows: [string, 'str' | 'mag' | 'dex' | 'vit', number][] = [['Strength', 'str', d.str], ['Magic', 'mag', d.mag], ['Dexterity', 'dex', d.dex], ['Vitality', 'vit', d.vit]];
-    rows.forEach(([n, k, v], i) => {
-      const y = 96 + i * 30;
-      ui.text(n, 20, y); ui.text(`${h.base[k]}`, 120, y, { align: 'right' }); ui.text(`${v}`, 170, y, { align: 'right', color: v > h.base[k] ? '#6a8aff' : v < h.base[k] ? '#d04040' : '#d8c89a' });
-      if (h.statPts > 0 && h.base[k] < CLASSES[h.cls].max[k]) ui.button('+', 186, y - 13, 32, 26, () => { spendStat(h, k); g.refresh(); }, { size: 16 });
+    const g = this.g(), h = g.hero, d = derive(h), c = ui.c;
+    this.artPanel(ui, 'ui/panel-character', 0);
+    this.closeBtn(ui, 284, 5, () => { this.left = 'none'; });
+    const val = (s: string, x: number, y: number, w: number, o: { color?: string; size?: number } = {}) => ui.text(s, x + w / 2, y + 9, { align: 'center', size: o.size ?? 11, color: o.color ?? '#e8d8a8' });
+    val(h.name, 80, 42, 199); val(CLASSES[h.cls].name, 80, 68, 119); val(`${h.clvl}`, 262, 68, 35);
+    const rows: ['str' | 'mag' | 'dex' | 'vit', number][] = [['str', d.str], ['mag', d.mag], ['dex', d.dex], ['vit', d.vit]];
+    rows.forEach(([k, v], i) => {
+      const y = 100 + i * 28;
+      val(`${v}`, 140, y, 47, { color: v > h.base[k] ? '#6a8aff' : v < h.base[k] ? '#d04040' : '#e8d8a8' });
+      const can = h.statPts > 0 && h.base[k] < CLASSES[h.cls].max[k];
+      // the frame paints a small [+] at (198, y+1); light it up when a point can go there, with a finger-sized hit box
+      if (can) { c.strokeStyle = '#e8c040'; c.lineWidth = 2; c.strokeRect(197, y, 17, 17); ui.area(190, y - 6, 32, 29, () => { spendStat(h, k); g.refresh(); }); }
+      else { c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(197, y, 17, 17); }
     });
-    if (h.statPts) ui.text(`Points to distribute: ${h.statPts}`, 20, 214, { color: '#e8c040' });
-    const r: [string, string][] = [
-      ['Gold', `${h.gold}`], ['Armor class', `${d.ac}`], ['To hit', `${50 + Math.floor(d.dex / 2) + d.toHit + h.clvl + (h.cls === 'warrior' ? 20 : 0)}%`],
+    if (h.statPts) ui.text(`${h.statPts} point${h.statPts > 1 ? 's' : ''} to distribute`, 24, 208, { size: 10, color: '#e8c040' });
+    val(`${Math.ceil(h.hp)}`, 80, 220, 55, { color: h.hp < d.maxHp ? '#ff8070' : '#e8d8a8' }); val(`${d.maxHp}`, 160, 220, 55);
+    val(`${Math.floor(h.mana)}`, 80, 248, 55, { color: h.mana < d.maxMana ? '#90a8ff' : '#e8d8a8' }); val(`${d.maxMana}`, 160, 248, 55);
+    val(`${h.exp}`, 140, 284, 79); val(h.clvl >= 50 ? 'None' : `${EXP_LEVELS[h.clvl]}`, 140, 308, 79); val(`${h.gold}`, 80, 328, 79, { color: '#e8c040' });
+    // D1's combat lines have no box on this frame: small text in the empty column right of the stat buttons
+    const side: [string, string][] = [
+      ['Armor', `${d.ac}`], ['To hit', `${50 + Math.floor(d.dex / 2) + d.toHit + h.clvl + (h.cls === 'warrior' ? 20 : 0)}%`],
       ['Damage', `${d.minDam + d.charDamMod + d.damMod}-${Math.trunc(d.maxDam * (100 + d.pctDam) / 100) + d.charDamMod + d.damMod}`],
-      ['Life', `${Math.ceil(h.hp)}/${d.maxHp}`], ['Mana', `${Math.floor(h.mana)}/${d.maxMana}`],
-      ['Resist magic', `${d.mr}%`], ['Resist fire', `${d.fr}%`], ['Resist lightning', `${d.lr}%`],
+      ['Res mag', `${d.mr}%`], ['Res fire', `${d.fr}%`], ['Res ltn', `${d.lr}%`],
     ];
-    r.forEach(([a, b], i) => { const col = i < 5 ? 0 : 1; const y = 236 + (i % 5) * 22; ui.text(a, 20 + col * 160, y, { size: 11 }); ui.text(b, 140 + col * 160, y, { size: 11, align: 'right' }); });
+    side.forEach(([a, b], i) => { const y = 104 + i * 17 + (i >= 3 ? 8 : 0); ui.text(a, 226, y, { size: 9, color: '#a89870' }); ui.text(b, 306, y, { size: 10, align: 'right' }); });
   }
   drawQuest(ui: UI) {
     const g = this.g();
@@ -264,47 +272,46 @@ export class Hud {
     }
   }
 
-  // ---------- inventory (panel space, right; 31 px cells vs D1's 28) ----------
+  // ---------- inventory (panel space, right): the CC0 frame's D1 slot boxes, 28 px cells on a 29 px pitch ----------
   static SLOT_RECT: Record<BodySlot, [number, number, number, number]> = {
-    handL: [8, 44, 64, 96], head: [128, 36, 64, 64], amulet: [212, 44, 32, 32], chest: [128, 104, 64, 96], handR: [248, 44, 64, 96], ringL: [24, 152, 32, 32], ringR: [264, 152, 32, 32],
+    handL: [72, 80, 27, 83], head: [130, 40, 55, 55], amulet: [196, 48, 27, 27], chest: [130, 100, 55, 83], handR: [196, 100, 55, 83], ringL: [72, 170, 27, 27], ringR: [226, 170, 27, 27],
   };
-  static CELL = 31;
+  static GRID = { x: 20, y: 220, pitch: 29, cell: 27 };
   drawInv(ui: UI) {
     const g = this.g(), h = g.hero, c = ui.c, X = 320, dh = derive(h);
-    ui.panel(X, 0, 320, PS_H);
-    ui.text('Inventory', X + 160, 20, { align: 'center', size: 15, bold: true });
-    this.closeBtn(ui, X + 286, 4, () => { this.right = 'none'; this.sel = null; g.pendingPick = ''; });
-    const lbl: Record<BodySlot, string> = { head: 'Head', amulet: 'Amu', chest: 'Body', handL: 'Weapon', handR: 'Shield', ringL: 'Ring', ringR: 'Ring' };
+    this.artPanel(ui, 'ui/panel-inventory', X);
+    this.closeBtn(ui, X + 284, 5, () => { this.right = 'none'; this.sel = null; g.pendingPick = ''; });
     for (const s of BODY_SLOTS) {
       const [x, y, w, hh] = Hud.SLOT_RECT[s];
       const it = h.body[s];
-      c.fillStyle = this.sel && this.sel === it ? 'rgba(80,80,140,0.8)' : '#15120d'; c.fillRect(X + x, y, w, hh); c.strokeStyle = '#6a5a3a'; c.lineWidth = 1; c.strokeRect(X + x + 0.5, y + 0.5, w - 1, hh - 1);
-      if (it) { if (!reqOk(h, it, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); } drawIcon(c, it, X + x + 2, y + 2, w - 4, hh - 4); }
-      else ui.text(lbl[s], X + x + w / 2, y + hh / 2, { align: 'center', size: 9, color: '#5a4e38' });
-      ui.area(X + x, y, w, hh, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
+      if (it) {
+        c.fillStyle = this.sel === it ? 'rgba(80,80,140,0.8)' : 'rgba(40,34,24,0.9)'; c.fillRect(X + x, y, w, hh);
+        if (!reqOk(h, it, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); }
+        drawIcon(c, it, X + x + 1, y + 1, w - 2, hh - 2);
+      }
+      ui.area(X + x - 2, y - 2, w + 4, hh + 4, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
     }
-    const cs = Hud.CELL, gx = X + (320 - INV_W * cs) / 2, gy = 208;
-    for (let yy = 0; yy < INV_H; yy++) for (let xx = 0; xx < INV_W; xx++) { c.fillStyle = '#15120d'; c.fillRect(gx + xx * cs, gy + yy * cs, cs - 1, cs - 1); }
+    const G = Hud.GRID, gx = X + G.x, gy = G.y;
     for (const e of h.inv) {
-      const x = gx + e.x * cs, y = gy + e.y * cs, w = e.item.w * cs - 1, hh = e.item.h * cs - 1;
-      c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.8)' : '#221d15'; c.fillRect(x, y, w, hh);
+      const x = gx + e.x * G.pitch, y = gy + e.y * G.pitch, w = (e.item.w - 1) * G.pitch + G.cell, hh = (e.item.h - 1) * G.pitch + G.cell;
+      c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.8)' : 'rgba(40,34,24,0.9)'; c.fillRect(x, y, w, hh);
       if (!reqOk(h, e.item, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(x, y, w, hh); }
       drawIcon(c, e.item, x + 1, y + 1, w - 2, hh - 2);
-      ui.area(x, y, w, hh, () => this.tapItem(e.item), () => { this.info = e.item; });
+      ui.area(x - 1, y - 1, w + 2, hh + 2, () => this.tapItem(e.item), () => { this.info = e.item; });
     }
-    ui.text(`Gold: ${h.gold}`, X + 160, 340, { align: 'center', size: 12, color: '#e8c040' });
-    if (this.sel) ui.text('Tap again to use / equip  -  hold for info', X + 160, 196, { align: 'center', size: 9, color: '#9a8a62' });
-    // the belt (8 slots) sits in the left half while the inventory is open
+    ui.text(`${h.gold}`, X + 78, 340, { size: 11, color: '#e8c040' });
+    if (this.sel) ui.text('Tap again to use / equip - hold for info', X + 300, 211, { align: 'right', size: 9, color: '#9a8a62' });
+    // the belt (8 slots, CC0 belt-slot frame) sits in the left half while the inventory is open
     if (this.left === 'none') {
       const bx = 24, by = 280, bc = 34;
       ui.panel(bx - 8, by - 26, 8 * bc + 16, bc + 36);
       ui.text('Belt', bx, by - 12, { size: 11, color: '#d8b860' });
       for (let i = 0; i < 8; i++) {
         const it = h.belt[i], x = bx + i * bc;
-        c.fillStyle = this.sel && this.sel === it ? 'rgba(80,80,140,0.8)' : '#15120d'; c.fillRect(x, by, bc - 2, bc - 2);
-        c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, by + 0.5, bc - 3, bc - 3);
-        ui.text(`${i + 1}`, x + 5, by + 6, { size: 8, color: '#6a5a3a' });
-        if (it) drawIcon(c, it, x + 2, by + 2, bc - 6, bc - 6);
+        if (!drawImg(c, 'ui/belt-slot', x, by, bc - 2, bc - 2)) { c.fillStyle = '#15120d'; c.fillRect(x, by, bc - 2, bc - 2); c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, by + 0.5, bc - 3, bc - 3); }
+        if (this.sel && this.sel === it) { c.fillStyle = 'rgba(80,80,140,0.6)'; c.fillRect(x, by, bc - 2, bc - 2); }
+        ui.text(`${i + 1}`, x + 5, by + 6, { size: 8, color: '#8a7a52' });
+        if (it) drawIcon(c, it, x + 3, by + 3, bc - 8, bc - 8);
         ui.area(x, by, bc - 2, bc - 2, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
       }
     }
@@ -356,38 +363,52 @@ export class Hud {
     btns.forEach(([l, f], i) => ui.button(l, x + 10 + i * (bw + 6), by, bw, 34, f, { size: 12 }));
   }
 
-  // ---------- spellbook (panel space, right): tap a spell, then a slot ----------
+  // ---------- spellbook (panel space, right): CC0 two-page frame; left page = learned spells, right = staff + scrolls ----------
+  spellPage = 0;
+  static SPELL_BOX: [number, number][] = [[28, 70], [90, 70], [28, 140], [90, 140]];
   drawSpells(ui: UI) {
-    const g = this.g(), h = g.hero, X = 320;
-    ui.panel(X, 0, 320, PS_H);
-    ui.text('Spellbook', X + 160, 22, { align: 'center', size: 16, bold: true });
-    this.closeBtn(ui, X + 286, 4, () => { this.right = 'none'; });
-    const entries: [string, string, string][] = [];
-    for (const [id, lv] of Object.entries(h.spells)) { const s = SPELLS[id]; if (s) entries.push([id, `${s.name}  (level ${lv})`, `Mana ${spellMana(s, lv)}${CASTABLE.has(id) ? '' : '  - not in this build'}`]); }
+    const g = this.g(), h = g.hero, X = 320, c = ui.c;
+    this.artPanel(ui, 'ui/panel-spellbook', X);
+    this.closeBtn(ui, X + 284, 5, () => { this.right = 'none'; });
+    type E = { id: string; name: string; sub: string; glyph: string };
+    const learned: E[] = [], carried: E[] = [];
+    for (const [id, lv] of Object.entries(h.spells)) { const s = SPELLS[id]; if (s) learned.push({ id, name: s.name, sub: `L${lv}  ${spellMana(s, lv)}m${CASTABLE.has(id) ? '' : ' *'}`, glyph: spellGlyph(id) }); }
     const st = h.body.handL;
-    if (st?.itype === 'ITYPE_STAFF' && SPELL_BY_D1[st.spell]) { const s = SPELL_BY_D1[st.spell]; entries.push([`staff:${s.id}`, `Staff: ${s.name}`, `${st.charges}/${st.maxCharges} charges`]); }
+    if (st?.itype === 'ITYPE_STAFF' && SPELL_BY_D1[st.spell]) { const s = SPELL_BY_D1[st.spell]; carried.push({ id: `staff:${s.id}`, name: s.name, sub: `staff ${st.charges}/${st.maxCharges}`, glyph: 'staff' }); }
     const scrolls = new Map<string, number>();
     for (const it of [...h.belt, ...h.inv.map((e) => e.item)]) if (it && it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell]) { const id = SPELL_BY_D1[it.spell].id; scrolls.set(id, (scrolls.get(id) ?? 0) + 1); }
-    for (const [id, n] of scrolls) entries.push([`scroll:${id}`, `Scroll: ${SPELLS[id].name}`, `${n} in pack/belt`]);
-    if (!entries.length) ui.wrap('No spells yet. Read books, or carry scrolls or a staff, to fill the skill slots.', X + 20, 70, 280, 16, { align: 'center' });
-    entries.slice(0, 6).forEach(([id, a, b], i) => {
-      const y = 44 + i * 40, slot = h.slots.indexOf(id);
-      ui.button('', X + 12, y, 296, 36, () => {
-        if (this.spellSel === id && slot < 0) { const free = h.slots.indexOf(null); if (free >= 0) h.slots = assignSlot(h.slots, free, id); }
-        this.spellSel = id;
-      }, { on: this.spellSel === id });
-      ui.text(a, X + 22, y + 12, { size: 12 }); ui.text(b, X + 22, y + 27, { size: 10, color: '#9a8a62' });
-      if (slot >= 0) ui.text(`slot ${slot + 1}`, X + 298, y + 18, { align: 'right', size: 10, color: '#9cf' });
-    });
-    // slot row
-    ui.text(this.spellSel ? `Assign ${skillLabel(g, this.spellSel)} to:` : 'Tap a spell, then a slot', X + 160, 292, { align: 'center', size: 11, color: '#d8b860' });
+    for (const [id, n] of scrolls) carried.push({ id: `scroll:${id}`, name: SPELLS[id].name, sub: `scroll x${n}`, glyph: spellGlyph(id) });
+    const pages = Math.max(1, Math.ceil(learned.length / 4), Math.ceil(carried.length / 4));
+    this.spellPage = Math.min(this.spellPage, pages - 1);
+    const page = (list: E[], px: number, title: string) => {
+      ui.text(title, X + px + 57, 54, { align: 'center', size: 10, color: '#d8b860' });
+      list.slice(this.spellPage * 4, this.spellPage * 4 + 4).forEach((e, i) => {
+        const [bx, by] = Hud.SPELL_BOX[i], x = X + px + bx - 28, y = by, slot = h.slots.indexOf(e.id);
+        if (this.spellSel === e.id) { c.fillStyle = 'rgba(80,80,140,0.6)'; c.fillRect(x, y, 55, 55); }
+        drawGlyph(c, e.glyph, x + 27, y + 19, 1.2);
+        ui.text(shortName(e.name), x + 27, y + 39, { align: 'center', size: 9 });
+        ui.text(e.sub, x + 27, y + 49, { align: 'center', size: 8, color: '#9a8a62' });
+        if (slot >= 0) ui.text(`${slot + 1}`, x + 50, y + 7, { align: 'right', size: 10, bold: true, color: '#9cf' });
+        ui.area(x - 3, y - 3, 61, 61, () => {
+          if (this.spellSel === e.id && slot < 0) { const free = h.slots.indexOf(null); if (free >= 0) h.slots = assignSlot(h.slots, free, e.id); }
+          this.spellSel = e.id;
+        });
+      });
+    };
+    page(learned, 28, 'Spells'); page(carried, 176, 'Staff & scrolls');
+    if (!learned.length && !carried.length) ui.wrap('No spells yet. Read books, or carry scrolls or a staff.', X + 24, 214, 120, 13, { size: 10, color: '#9a8a62' });
+    // slot row (Order 4 assignment flow) in the pages' empty lower half
+    const sel = this.spellSel ? [...learned, ...carried].find((e) => e.id === this.spellSel) : null;
+    ui.text(sel ? `Assign ${skillLabel(g, sel.id)} to:` : 'Tap a spell, then a slot', X + 160, 236, { align: 'center', size: 10, color: '#d8b860' });
     for (let i = 0; i < SLOT_COUNT; i++) {
-      const id = h.slots[i], x = X + 14 + i * 74;
-      ui.button(id ? shortName(skillLabel(g, id)) : `Slot ${i + 1}`, x, 304, 68, 40, () => {
+      const id = h.slots[i], x = X + [24, 86, 172, 234][i];
+      ui.button(id ? shortName(skillLabel(g, id)) : `Slot ${i + 1}`, x, 250, 60, 40, () => {
         if (this.spellSel) { h.slots = assignSlot(h.slots, i, this.spellSel); this.spellSel = null; }
         else if (id) h.slots = assignSlot(h.slots, i, null);
       }, { size: 10, on: !!id });
     }
+    ui.text(`${this.spellPage + 1}`, X + 81, 334, { align: 'center', size: 10 }); ui.text(`${pages}`, X + 137, 334, { align: 'center', size: 10 });
+    if (pages > 1) ui.area(X + 56, 316, 110, 34, () => { this.spellPage = (this.spellPage + 1) % pages; });
   }
 
   // ---------- full automap (css px) ----------
@@ -551,6 +572,17 @@ function pickUpPack(h: Game['hero'], it: Item): boolean {
 }
 function usable(it: Item) { return (it.misc !== 'IMISC_NONE' && it.misc !== 'IMISC_STAFF' && it.misc !== 'IMISC_UNIQUE' && it.loc === 'ILOC_UNEQUIPABLE') || it.misc === 'IMISC_BOOK'; }
 function shortName(s: string) { const w = s.replace(/^(Scroll|Staff) /, '').split(' '); return (w.length > 1 ? w.map((x) => x[0]).join('') : w[0]).slice(0, 8); }
+/** Life/mana orb: the CC0 empty orb, then the full orb clipped to the fill level (D1 fills from the bottom). */
+function orb(c: CanvasRenderingContext2D, key: string, x: number, y: number, d: number, f: number, col: string) {
+  f = Math.max(0, Math.min(1, f));
+  if (drawImg(c, 'ui/orb-empty', x, y, d, d)) {
+    c.save(); c.beginPath(); c.rect(x, y + d * (1 - f), d, d * f); c.clip(); drawImg(c, key, x, y, d, d); c.restore();
+    return;
+  }
+  c.fillStyle = '#1a0e08'; c.beginPath(); c.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); c.fill();
+  c.save(); c.clip(); c.fillStyle = col; c.fillRect(x, y + d * (1 - f), d, d * f); c.restore();
+}
+function spellGlyph(id: string) { return /fire|inferno|flame|elemental/.test(id) ? 'sp_fire' : /bolt|light|chain|nova/.test(id) && id !== 'firebolt' ? 'sp_lightning' : 'spell'; }
 /** Small vector icons for the HUD (no icon font needed). */
 export function drawGlyph(c: CanvasRenderingContext2D, k: string, x: number, y: number, s = 1) {
   c.save(); c.translate(x, y); c.scale(s, s); c.lineWidth = 2; c.strokeStyle = '#e8d8a8'; c.fillStyle = '#e8d8a8';
