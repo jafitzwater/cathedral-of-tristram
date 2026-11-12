@@ -273,7 +273,7 @@ export class Hud {
     const g = this.g(), h = g.hero, c = ui.c, X = 320, dh = derive(h);
     ui.panel(X, 0, 320, PS_H);
     ui.text('Inventory', X + 160, 20, { align: 'center', size: 15, bold: true });
-    this.closeBtn(ui, X + 286, 4, () => { this.right = 'none'; this.sel = null; });
+    this.closeBtn(ui, X + 286, 4, () => { this.right = 'none'; this.sel = null; g.pendingPick = ''; });
     const lbl: Record<BodySlot, string> = { head: 'Head', amulet: 'Amu', chest: 'Body', handL: 'Weapon', handR: 'Shield', ringL: 'Ring', ringR: 'Ring' };
     for (const s of BODY_SLOTS) {
       const [x, y, w, hh] = Hud.SLOT_RECT[s];

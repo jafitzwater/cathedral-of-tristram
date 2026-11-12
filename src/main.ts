@@ -9,6 +9,8 @@ import { Audio } from './audio';
 import { loadArt } from './art';
 import { VIEW_H, VIEW_W, view } from './iso';
 import { joystickVector } from './controls';
+import { T } from './levels/types';
+import { TOWN_PORTAL_SPOT } from './levels/town';
 import { saveGame, loadGame, listHeroes, peekHero, deleteHero } from './save';
 import creditsText from '../CREDITS.md?raw';
 
@@ -107,6 +109,7 @@ const end = (e: PointerEvent, cancel: boolean) => {
     // tap-to-interact: monsters (soft-lock + attack), NPCs, items, objects, doors. Floor taps do nothing (no tap-to-move).
     const t = pickAt(game, p.x / view.zoom, p.y / view.zoom);
     if (t.kind !== 'tile') game.tap(t);
+    else { const tt = game.level.map.tiles[t.y * game.level.map.w + t.x]; const pp = game.portal && (game.cur === 'town' ? TOWN_PORTAL_SPOT : game.portal); if (tt === T.UP || tt === T.DOWN || (pp && pp.x === t.x && pp.y === t.y)) game.tap({ kind: 'stairs', x: t.x, y: t.y }); }
   }
 };
 canvas.addEventListener('pointerup', (e) => { e.preventDefault(); end(e, false); });
@@ -116,7 +119,10 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape' && screen === 'game'
 // ---- frame loop (rAF, fixed-step-free: dt clamped like Order 3) + fps meter ----
 let last = performance.now(), time = 0, frames = 0, fpsT = 0, fps = 0;
 const fpsLog: number[] = [];
+let workMs = 0;
+const workLog: number[] = [];
 function frame(now: number) {
+  const w0 = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000); last = now; time += dt;
   frames++; fpsT += dt; if (fpsT >= 1) { fps = frames / fpsT; fpsLog.push(Math.round(fps)); if (fpsLog.length > 120) fpsLog.shift(); frames = 0; fpsT = 0; }
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -141,7 +147,9 @@ function frame(now: number) {
       if (loadT <= 0 && game) { game.finishTravel(); for (const sf of game.sfx) audio.play(sf); game.sfx.length = 0; screen = 'game'; }
     } else scr.draw(ui, screen, dt);
   }
+  workMs += performance.now() - w0;
+  if (frames === 0 && fpsLog.length) { workLog.push(+(workMs / Math.max(1, fpsLog[fpsLog.length - 1])).toFixed(2)); workMs = 0; if (workLog.length > 120) workLog.shift(); }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, hud, view }; // read-only handle, only with ?smoke (headless smoke test)
+if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, size: () => [W, H, dpr] }; // read-only handle, only with ?smoke (headless smoke test)

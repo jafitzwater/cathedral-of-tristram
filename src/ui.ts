@@ -17,7 +17,7 @@ export class UI {
   /** Press-and-hold control (ATTACK): down on touch, up on release. Box is padded for fat fingers. */
   press(x: number, y: number, w: number, h: number, down: () => void, up: () => void) { this.boxes.push({ ...this.css(x, y, w, h), down, up }); }
   /** Blocks taps from falling through to the world under a panel. */
-  block(x: number, y: number, w: number, h: number) { this.boxes.push({ x, y, w, h, tap: () => {} }); }
+  block(x: number, y: number, w: number, h: number) { this.boxes.push({ ...this.css(x, y, w, h), tap: () => {} }); }
   panel(x: number, y: number, w: number, h: number) {
     const c = this.c;
     c.fillStyle = 'rgba(18,14,9,0.95)'; c.fillRect(x, y, w, h);

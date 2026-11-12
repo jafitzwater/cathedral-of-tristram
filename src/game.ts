@@ -436,7 +436,7 @@ export class Game {
       }
       case 'door': if (near(t)) { p.path = []; this.target = null; this.toggleDoor(t.x, t.y); return true; } go(t, true); return false;
       case 'tile': this.target = null; return false;
-      case 'stairs': if (p.tx === t.x && p.ty === t.y) { this.target = null; this.portalArmed = true; this.onPlayerTile(); return true; } go(t, false); if (!p.path.length) this.target = null; return false;
+      case 'stairs': if (p.tx === t.x && p.ty === t.y) { this.portalArmed = true; this.onPlayerTile(); return true; } go(t, false); if (!p.path.length) this.target = null; return false;
     }
   }
   startAttack(m: Mon | Obj | null) {
@@ -515,6 +515,11 @@ export class Game {
   }
   onPlayerTile() {
     const p = this.p, m = this.level.map;
+    // Order 4: with continuous joystick walking, stairs and portals only fire when deliberately targeted (INTERACT / tap),
+    // so brushing past the stairs does not change level.
+    const t0 = this.target;
+    if (!(t0 && t0.kind === 'stairs' && t0.x === p.tx && t0.y === p.ty)) { this.portalArmed = true; return; }
+    this.target = null;
     const t = at(m, p.tx, p.ty);
     if (t === T.DOWN && this.cur === 'town') { this.travel('l1', null); return; }
     if (t === T.DOWN && this.cur === 'l1') { this.say('The way down is not available (only Cathedral level 1 in this build)'); p.path = []; return; }

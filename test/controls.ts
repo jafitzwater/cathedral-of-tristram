@@ -120,3 +120,11 @@ st.p = { ...st.p, x: down.x - 1, y: down.y, tx: down.x - 1, ty: down.y, path: []
 assert.equal(at(st.level.map, down.x, down.y), T.DOWN);
 const si = interactFor(st)!; assert.equal(si.target.kind, 'stairs'); st.interact(); step(st, 1); assert.equal(st.pendingLevel?.to, 'l1');
 console.log('controls ok');
+// walking over the stairs with the stick does not change level; INTERACT does (tested above)
+{
+  const w = new Game('W2', 'warrior', 4); const dn = w.level.map.down!;
+  w.p = { ...w.p, x: dn.x - 1, y: dn.y, tx: dn.x - 1, ty: dn.y, path: [{ x: dn.x, y: dn.y }], prog: 0 };
+  for (let i = 0; i < 20; i++) w.update(0.05);
+  assert.equal(w.p.tx, dn.x); assert.equal(w.pendingLevel, null, 'brushing the stairs does not travel');
+  console.log('stairs ok');
+}
