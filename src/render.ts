@@ -3,7 +3,7 @@
 import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './iso';
 import type { NpcDef } from './levels/town';
 import { T, TALL, at } from './levels/types';
-import { BUILDINGS, TOWN_PORTAL_SPOT, type Building } from './levels/town';
+import { BUILDINGS, TAVERN_LIGHT, TOWN_PORTAL_SPOT, inBrush, type Building, type Dress } from './levels/town';
 import { buildingFade, frontS, sortKey, type SpriteBox } from './townArt';
 import { art, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
 import { WALL_PX, plainAbove, roomAt, stackPieces, wallData, wallFade } from './walls';
@@ -67,6 +67,10 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   const hroom = wd ? roomAt(m, g.p.x, g.p.y) : null;
   // Order 9: tall D1-proportioned walls, stacked courses (walls.ts)
   const stack = (bottom: string, sx: number, sy: number, upper = bottom) => { for (const q of stackPieces(bottom, upper)) drawCell(c, q.id, sx, sy + q.dy); };
+  // Order 12: the D1-sized town's flat ground (floors, tufts, the tavern glow) is static, so it is drawn once into a cached
+  // canvas a margin larger than the view and blitted each frame; the loop below then draws only the standing things.
+  const groundDone = town && townGround(c, m, cam);
+  const fa = (t: number, x: number, y: number, sx: number, sy: number, seen: number) => groundDone || floorArt(c, town, t, x, y, sx, sy, seen);
   for (let s = 0; s < m.w + m.h - 1; s++) {
     for (let x = Math.max(0, s - m.h + 1); x <= Math.min(s, m.w - 1); x++) {
       const y = s - x, t = at(m, x, y);
@@ -94,10 +98,18 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
           continue;
         }
       }
-      if (t === T.HOUSE && town && pieces.length) { floorArt(c, town, T.GRASS, x, y, sx, sy, seen); continue; }
+      if (t === T.HOUSE && town && pieces.length) { fa(T.GRASS, x, y, sx, sy, seen); continue; }
       if (t === T.TREE && hasFrame('bigtree01')) {
-        floorArt(c, town, T.GRASS, x, y, sx, sy, seen);
-        drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6);
+        // Order 12: the far-west brush and the edge woods are dense low brush on forest floor; lone trees stand on the grass
+        const ring = town && (x < 2 || y < 2 || x > m.w - 3 || y > m.h - 3), brush = town && (ring || inBrush(x, y));
+        fa(brush ? T.TREE : T.GRASS, x, y, sx, sy, ring ? seen * 0.45 : seen);
+        if (!brush) drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6);
+        else if ((x + y) % 2 === 0) { // every other tile: the sprites overlap into a solid thicket at half the draw calls
+          const h = hash(x, y);
+          if (ring) c.globalAlpha = 0.55;
+          drawFrame(c, BRUSH[h % BRUSH.length], sx + ((h >> 4) % 9) - 4, sy + TILE_H - 2, 1.45);
+          c.globalAlpha = 1;
+        }
       } else if (TALL.has(t)) {
         const [top, left, right, hgt] = TALL_COL[t];
         // D1 wall transparency: walls just in front of the hero fade
@@ -110,8 +122,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
         }
         c.globalAlpha = 1;
       } else {
-        const [a, b] = FLOOR_COL[t] ?? FLOOR_COL[T.FLOOR];
-        if (!floorArt(c, town, t, x, y, sx, sy, seen)) { shade(c, (x + y) % 2 ? a : b, seen); diamond(c, sx, sy); c.fill(); }
+        if (!groundDone) groundTile(c, m, town, t, x, y, sx, sy, seen);
         if (!town && (t === T.UP || t === T.DOWN)) drawFrame(c, t === T.UP ? 'stairs_s' : 'stairsAged_s', sx, sy + TILE_H - 2);
         if (t === T.UP || t === T.DOWN) { c.fillStyle = `rgba(255,230,160,${0.6 * seen})`; c.font = '10px serif'; c.textAlign = 'center'; c.fillText(t === T.UP ? 'UP' : 'DOWN', sx, sy + 20); }
         if (t === T.WATER) { c.fillStyle = 'rgba(120,160,255,0.15)'; c.fillRect(sx - 6 + Math.sin(time + x) * 6, sy + 14, 12, 2); }
@@ -149,22 +160,67 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
 function townPieces(): { b: Building; f: SpriteBox }[] {
   if (!hasFrame('smithy_full')) return [];
   const out: { b: Building; f: SpriteBox }[] = [];
-  for (const b of BUILDINGS) { const e = art.frame(b.art); if (e) out.push({ b, f: { ax: e.f.ax, ay: e.f.ay, w: e.f.w, h: e.f.h, eaves: e.f.eaves } }); }
+  for (const b of BUILDINGS) { const e = art.frame(b.art), k = b.s; if (e) out.push({ b, f: { ax: e.f.ax * k, ay: e.f.ay * k, w: e.f.w * k, h: e.f.h * k, eaves: e.f.eaves === undefined ? undefined : e.f.eaves * k } }); }
   return out;
 }
 function drawPiece(c: CanvasRenderingContext2D, b: Building, cam: { x: number; y: number }, fade: { roof: number; base: number }) {
   const p = tileToScreen(b.x, b.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
-  if (fade.roof === fade.base) { c.globalAlpha = fade.base; drawFrame(c, b.art, x, y, 1, b.flip); c.globalAlpha = 1; return; }
-  const f = art.frame(b.art)!.f, ey = Math.round(y - f.ay + (f.eaves ?? 0));
+  if (fade.roof === fade.base) { c.globalAlpha = fade.base; drawFrame(c, b.art, x, y, b.s, b.flip); c.globalAlpha = 1; return; }
+  const f = art.frame(b.art)!.f, ey = Math.round(y - (f.ay - (f.eaves ?? 0)) * b.s);
   for (const [y0, y1, a] of [[-1e4, ey, fade.roof], [ey, 1e4, fade.base]] as const) {
-    c.save(); c.beginPath(); c.rect(-1e4, y0, 3e4, y1 - y0); c.clip(); c.globalAlpha = a; drawFrame(c, b.art, x, y, 1, b.flip); c.restore();
+    c.save(); c.beginPath(); c.rect(-1e4, y0, 3e4, y1 - y0); c.clip(); c.globalAlpha = a; drawFrame(c, b.art, x, y, b.s, b.flip); c.restore();
   }
 }
 
+/** One flat ground tile: floor art (or the flat colour), then the town's tufts and the tavern's glow. */
+function groundTile(c: CanvasRenderingContext2D, m: Game['level']['map'], town: boolean, t: number, x: number, y: number, sx: number, sy: number, seen: number) {
+  const [a, b] = FLOOR_COL[t] ?? FLOOR_COL[T.FLOOR];
+  if (!floorArt(c, town, t, x, y, sx, sy, seen)) { shade(c, (x + y) % 2 ? a : b, seen); diamond(c, sx, sy); c.fill(); }
+  if (!town) return;
+  const dr = (m as { dress?: Dress }).dress?.get(y * m.w + x);
+  if (dr) drawFrame(c, dr, sx, sy + TILE_H - 4, 0.8);
+  if (x === TAVERN_LIGHT.x && y === TAVERN_LIGHT.y) { // Ogden's lit entrance
+    const gl = c.createRadialGradient(sx, sy + TILE_H / 2, 4, sx, sy + TILE_H / 2, 70);
+    gl.addColorStop(0, 'rgba(255,190,90,0.55)'); gl.addColorStop(1, 'rgba(255,160,60,0)');
+    c.fillStyle = gl; c.beginPath(); c.ellipse(sx, sy + TILE_H / 2, 70, 36, 0, 0, Math.PI * 2); c.fill();
+  }
+}
+let ground: { cv: HTMLCanvasElement; m: object; k: number; x0: number; y0: number; x1: number; y1: number; ready: boolean } | null = null;
+const GROUND_MARGIN = 192; // world px of slack around the view before the cache is redrawn
+/** Blit the cached town ground for this view (redrawing it when the view leaves it). False while the floor art is not resident. */
+function townGround(c: CanvasRenderingContext2D, m: Game['level']['map'], cam: P): boolean {
+  if (!hasFrame('town_grass_00') || typeof document === 'undefined') return false;
+  const tr = c.getTransform(), k = tr.a;
+  const vx0 = -cam.x, vy0 = -cam.y, vx1 = vx0 + view.w, vy1 = vy0 + view.h;
+  if (!ground || ground.m !== m || ground.k !== k || vx0 < ground.x0 || vy0 < ground.y0 || vx1 > ground.x1 || vy1 > ground.y1 || !ground.ready) {
+    const x0 = Math.floor(vx0 - GROUND_MARGIN), y0 = Math.floor(vy0 - GROUND_MARGIN), x1 = Math.ceil(vx1 + GROUND_MARGIN), y1 = Math.ceil(vy1 + GROUND_MARGIN);
+    const cv = ground?.cv ?? document.createElement('canvas'), w = Math.ceil((x1 - x0) * k), h = Math.ceil((y1 - y0) * k);
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    const g2 = cv.getContext('2d')!;
+    g2.setTransform(1, 0, 0, 1, 0, 0); g2.fillStyle = '#000'; g2.fillRect(0, 0, w, h);
+    g2.setTransform(k, 0, 0, k, -x0 * k, -y0 * k);
+    let ok = true;
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+      const p = tileToScreen(x, y);
+      if (p.x < x0 - TILE_W || p.x > x1 + TILE_W || p.y < y0 - TILE_H * 3 || p.y > y1 + TILE_H) continue;
+      const t = at(m, x, y), ring = x < 2 || y < 2 || x > m.w - 3 || y > m.h - 3;
+      const gt = t === T.TREE ? (ring || inBrush(x, y) ? T.TREE : T.GRASS) : t === T.HOUSE ? T.GRASS : t;
+      if (t === T.WALL) continue; // the wall prisms cover their tile
+      if (TALL.has(t) || t === T.HOUSE) ok = floorArt(g2, true, gt, x, y, p.x, p.y, ring ? 0.45 : 1) && ok;
+      else groundTile(g2, m, true, t, x, y, p.x, p.y, 1);
+    }
+    ground = { cv, m, k, x0, y0, x1, y1, ready: ok };
+  }
+  c.save(); c.setTransform(1, 0, 0, 1, tr.e, tr.f);
+  c.drawImage(ground.cv, Math.round((ground.x0 + cam.x) * k), Math.round((ground.y0 + cam.y) * k));
+  c.restore();
+  return true;
+}
+const BRUSH = ['bush01', 'bush02', 'bush04', 'bush05', 'shrub1-01', 'shrub1-02', 'shrub1-03', 'shrub1-04', 'pine-none01', 'pine-none02', 'pine-none03'];
 const hash = (x: number, y: number) => ((x * 73856093) ^ (y * 19349663)) >>> 0;
 /** Floor diamonds from the CC0 tile atlas (rubberduck), darkened by the light level. */
 function floorArt(c: CanvasRenderingContext2D, town: boolean, t: number, x: number, y: number, sx: number, sy: number, seen: number): boolean {
-  const set = town ? ({ [T.GRASS]: 'town_grass', [T.PATH]: 'town_path', [T.BRIDGE]: 'town_dirt_dark', [T.FLOOR]: 'town_dirt', [T.DOWN]: 'town_sand', [T.UP]: 'town_sand' } as Record<number, string>)[t]
+  const set = town ? ({ [T.TREE]: 'town_forest', [T.WALL]: 'town_dirt_dark', [T.GRASS]: 'town_grass', [T.PATH]: 'town_path', [T.BRIDGE]: 'town_dirt_dark', [T.FLOOR]: 'town_dirt', [T.DOWN]: 'town_sand', [T.UP]: 'town_sand' } as Record<number, string>)[t]
     : ({ [T.FLOOR]: 'cath_stone', [T.UP]: 'cath_stone', [T.DOWN]: 'cath_stone', [T.DOOR_OPEN]: 'cath_dirt' } as Record<number, string>)[t];
   if (!set) return false;
   const h = hash(x, y), v = !town && t === T.FLOOR && h % 23 === 0 ? 'cath_blood' : set;
@@ -275,6 +331,13 @@ function drawObj(c: CanvasRenderingContext2D, g: Game, o: Game['level']['map']['
       case 'body': c.fillStyle = '#5a2a2a'; c.fillRect(x - 3, y - 44, 6, 42); c.fillStyle = '#8a4a3a'; c.fillRect(x - 6, y - 36, 12, 18); break;
       case 'well': c.fillStyle = '#555'; c.beginPath(); c.ellipse(x, y - 6, 22, 11, 0, 0, Math.PI * 2); c.fill(); c.fillStyle = '#123'; c.beginPath(); c.ellipse(x, y - 8, 14, 7, 0, 0, Math.PI * 2); c.fill(); break;
       case 'cross': c.fillStyle = '#777'; c.fillRect(x - 2, y - 26, 4, 24); c.fillRect(x - 8, y - 20, 16, 4); break;
+      case 'sealed': { // Order 12: closed entrances (stand-ins until the Sprite Director's entrance art lands)
+        c.fillStyle = o.var1 === 12 ? '#2a1c10' : '#4a4640'; c.beginPath(); c.ellipse(x, y - 6, 30, 15, 0, 0, Math.PI * 2); c.fill();
+        c.fillStyle = o.var1 === 3 ? '#3a0804' : '#0a0806'; c.beginPath(); c.ellipse(x, y - 8, 20, 10, 0, 0, Math.PI * 2); c.fill();
+        if (o.var1 === 3) { c.fillStyle = 'rgba(255,70,20,0.55)'; c.beginPath(); c.ellipse(x, y - 8, 10, 4, 0, 0, Math.PI * 2); c.fill(); }
+        c.strokeStyle = o.var1 === 12 ? '#6a4a2a' : '#5a5650'; c.lineWidth = 3; c.beginPath(); c.moveTo(x - 16, y - 14); c.lineTo(x + 16, y - 2); c.moveTo(x - 16, y - 2); c.lineTo(x + 16, y - 14); c.stroke(); c.lineWidth = 1;
+        break;
+      }
       default: break;
     }
   }
