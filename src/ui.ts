@@ -1,14 +1,21 @@
 // Immediate-mode touch UI: widgets register hit boxes while drawing; taps are routed to the top-most box.
-export interface Box { x: number; y: number; w: number; h: number; tap?: () => void; hold?: () => void }
+export interface Box { x: number; y: number; w: number; h: number; tap?: () => void; hold?: () => void; down?: () => void; up?: () => void }
 export class UI {
   boxes: Box[] = [];
   c!: CanvasRenderingContext2D;
-  begin(c: CanvasRenderingContext2D) { this.c = c; this.boxes = []; }
+  dpr = 1; // backing px per css px; boxes are stored in css px whatever transform is active
+  begin(c: CanvasRenderingContext2D, dpr = 1) { this.c = c; this.boxes = []; this.dpr = dpr; }
   hit(x: number, y: number): Box | null {
     for (let i = this.boxes.length - 1; i >= 0; i--) { const b = this.boxes[i]; if (x >= b.x && y >= b.y && x < b.x + b.w && y < b.y + b.h) return b; }
     return null;
   }
-  area(x: number, y: number, w: number, h: number, tap?: () => void, hold?: () => void) { this.boxes.push({ x, y, w, h, tap, hold }); }
+  private css(x: number, y: number, w: number, h: number) {
+    const m = this.c.getTransform(), k = this.dpr;
+    return { x: (m.a * x + m.e) / k, y: (m.d * y + m.f) / k, w: (m.a * w) / k, h: (m.d * h) / k };
+  }
+  area(x: number, y: number, w: number, h: number, tap?: () => void, hold?: () => void) { this.boxes.push({ ...this.css(x, y, w, h), tap, hold }); }
+  /** Press-and-hold control (ATTACK): down on touch, up on release. Box is padded for fat fingers. */
+  press(x: number, y: number, w: number, h: number, down: () => void, up: () => void) { this.boxes.push({ ...this.css(x, y, w, h), down, up }); }
   /** Blocks taps from falling through to the world under a panel. */
   block(x: number, y: number, w: number, h: number) { this.boxes.push({ x, y, w, h, tap: () => {} }); }
   panel(x: number, y: number, w: number, h: number) {

@@ -1,86 +1,225 @@
-// In-game UI: D1 control panel, char sheet, quest log, inventory, spellbook, automap, item info (tap-and-hold), store dialogs,
-// in-game menu with options, death screen. All placeholder-styled after D1's panels.
+// In-game UI, Order 4 (Diablo Immortal-style controls): floating joystick (drawn here, driven by main.ts), ATTACK button with
+// soft-lock, 4 skill slots + class skill with recovery and mana overlays, contextual INTERACT, potion quick buttons, compact
+// top HUD (life/mana/XP bars, minimap, icon buttons). D1 panels (char sheet, quest log, inventory, spellbook, stores, menu,
+// death screen) open over the game in a 640x352 "panel space" scaled to the screen, with close buttons and bigger slots.
 import { CLASSES, EXP_LEVELS } from './data/classes';
 import { SPELLS, SPELL_BY_D1, CASTABLE, spellMana } from './data/spells';
 import { NPC_TEXT } from './data/npcs';
 import { BASE } from './data/items';
-import { PLAY_H, VIEW_W, VIEW_H } from './iso';
+import { VIEW_W } from './iso';
 import { T } from './levels/types';
 import { BODY_SLOTS, INV_W, INV_H, derive, equip, unequip, removeItem, pickUp, spendStat, reqOk, isBeltable, type BodySlot } from './player';
 import { itemPrice, sellPrice, boyPrice, repairCost, rechargeCost, IDENTIFY_COST, DUR_INDESTRUCTIBLE, type Item } from './itemgen';
 import { itemColor } from './render';
-import { drawFrameBox, drawImg, hasImg } from './art';
+import { drawFrameBox } from './art';
+import { assignSlot, knob, SLOT_COUNT, JOY_RADIUS } from './controls';
 import type { Game } from './game';
 import type { UI } from './ui';
 
-const Y = PLAY_H;
 type StoreMode = 'menu' | 'talk' | 'buy' | 'premium' | 'sell' | 'repair' | 'identify' | 'recharge' | 'wirt';
 export interface HudHooks { save(): void; load(): void; newGame(): void; quit(): void; setVolumes(m: number, s: number): void; vol(): [number, number] }
+export interface Layout { W: number; H: number; dpr: number; inset: { l: number; r: number; t: number; b: number } }
+export interface JoyDraw { ox: number; oy: number; tx: number; ty: number }
+const PS_W = 640, PS_H = 352; // panel space
+
+/** Positions of the right-hand action cluster (css px), shared by drawing and the tests. */
+export function actionLayout(W: number, H: number, inset: Layout['inset']) {
+  const R = W - inset.r - 10, B = H - inset.b - 10;
+  const atk = { x: R - 50, y: B - 50, r: 46 };
+  const ring = 100, ang = [160, 192, 224, 256, 288].map((a) => (a * Math.PI) / 180);
+  const at = (a: number, r: number) => ({ x: atk.x + Math.cos(a) * ring, y: atk.y + Math.sin(a) * ring, r });
+  return {
+    atk,
+    skill: at(ang[0], 25),                             // class skill (Repair / Disarm / Recharge)
+    slots: [at(ang[1], 25), at(ang[2], 25), at(ang[3], 25), at(ang[4], 25)],
+    hpPot: { x: atk.x - 196, y: B - 22, r: 21 }, mpPot: { x: atk.x - 244, y: B - 22, r: 21 },
+    interact: { x: atk.x - 300, y: B - 168, w: 150, h: 40 },
+  };
+}
 
 export class Hud {
   left: 'none' | 'char' | 'quest' = 'none';
   right: 'none' | 'inv' | 'spell' = 'none';
   map = false; menu: 'none' | 'main' | 'options' = 'none';
-  skillArmed = false;
-  sel: Item | null = null;
+  sel: Item | null = null;   // tap once = select, tap again = use/equip
+  info: Item | null = null;  // long-press = item info popup
+  spellSel: string | null = null;
   store: StoreMode = 'menu'; scroll = 0; pick: Item | null = null;
+  lay: Layout = { W: 844, H: 390, dpr: 1, inset: { l: 0, r: 0, t: 0, b: 0 } };
+  joy: JoyDraw | null = null;
+  attackDown = false;
   constructor(private g: () => Game, private hooks: HudHooks) {}
 
-  closeAll() { this.left = 'none'; this.right = 'none'; this.map = false; this.sel = null; }
+  closeAll() { this.left = 'none'; this.right = 'none'; this.map = false; this.sel = null; this.info = null; }
+  panelOpen() { return this.left !== 'none' || this.right !== 'none'; }
+  /** Blocks the joystick/world on the given css x when a panel covers it. */
+  covers(x: number): boolean {
+    const { ox, ps } = this.ps();
+    if (this.menu !== 'none' || this.g().dialog || this.g().dead || this.info) return true;
+    return (this.left !== 'none' && x < ox + 320 * ps) || (this.right !== 'none' && x >= ox + 320 * ps);
+  }
+  ps() { const { W, H } = this.lay, ps = Math.min(W / PS_W, H / PS_H); return { ps, ox: (W - PS_W * ps) / 2, oy: (H - PS_H * ps) / 2 }; }
+  private enterPS(ui: UI) { const { ps, ox, oy } = this.ps(), k = this.lay.dpr; ui.c.save(); ui.c.setTransform(k * ps, 0, 0, k * ps, k * ox, k * oy); }
 
   draw(ui: UI) {
-    const g = this.g();
+    const g = this.g(), c = ui.c, { W, H } = this.lay;
+    if (g.pendingPick && this.right !== 'inv') this.right = 'inv';
     if (this.map) this.drawAutomap(ui);
-    if (this.left === 'char') this.drawChar(ui);
-    if (this.left === 'quest') this.drawQuest(ui);
-    if (this.right === 'inv') this.drawInv(ui);
-    if (this.right === 'spell') this.drawSpells(ui);
-    this.drawPanel(ui);
-    if (this.sel) this.drawItemInfo(ui, this.sel);
-    if (g.dialog) this.drawStore(ui);
-    if (this.menu !== 'none') this.drawMenu(ui);
-    if (g.dead) this.drawDeath(ui);
+    const overlay = this.menu !== 'none' || !!g.dialog || g.dead;
+    if (!overlay) this.drawControls(ui);
+    if (this.panelOpen() || this.info || overlay) {
+      if (overlay) { c.fillStyle = g.dead ? 'rgba(40,0,0,0.55)' : 'rgba(0,0,0,0.6)'; c.fillRect(0, 0, W, H); }
+      this.enterPS(ui);
+      if (!overlay) {
+        if (this.left === 'char') this.drawChar(ui);
+        if (this.left === 'quest') this.drawQuest(ui);
+        if (this.right === 'inv') this.drawInv(ui);
+        if (this.right === 'spell') this.drawSpells(ui);
+      }
+      if (this.info) this.drawItemInfo(ui, this.info);
+      if (g.dialog) this.drawStore(ui);
+      if (this.menu !== 'none') this.drawMenu(ui);
+      if (g.dead) this.drawDeath(ui);
+      c.restore();
+    }
+  }
+  closeBtn(ui: UI, x: number, y: number, fn: () => void) {
+    const c = ui.c;
+    c.fillStyle = '#3a1a12'; c.fillRect(x, y, 30, 30); c.strokeStyle = '#c8a060'; c.lineWidth = 1.5; c.strokeRect(x + 0.5, y + 0.5, 29, 29);
+    c.strokeStyle = '#e8d8a8'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(x + 9, y + 9); c.lineTo(x + 21, y + 21); c.moveTo(x + 21, y + 9); c.lineTo(x + 9, y + 21); c.stroke();
+    ui.area(x - 6, y - 4, 40, 40, fn);
   }
 
-  // ---------- control panel ----------
-  drawPanel(ui: UI) {
-    // Layout follows the CC0 bottom-panel art (ui/ui.json): orbs at x 64/576, belt at 194+32i, buttons at y 98.
-    const g = this.g(), c = ui.c, h = g.hero, d = g.d;
-    const art = drawImg(c, 'ui/bottom-panel', 0, Y);
-    if (!art) { c.fillStyle = '#2a241c'; c.fillRect(0, Y, VIEW_W, 128); c.strokeStyle = '#8a7a52'; c.lineWidth = 2; c.strokeRect(1, Y + 1, VIEW_W - 2, 126); }
-    ui.block(0, Y, VIEW_W, 128);
-    orb(c, 64, Y + 64, h.hp / Math.max(1, d.maxHp), '#a01010', 'ui/orb-life');
-    orb(c, VIEW_W - 64, Y + 64, d.maxMana ? h.mana / d.maxMana : 0, g.manaShield ? '#3060e0' : '#1830b0', 'ui/orb-mana');
-    ui.area(16, Y + 14, 100, 100, () => this.quickPotion(true));
-    ui.area(VIEW_W - 116, Y + 14, 100, 100, () => this.quickPotion(false));
-    const btn = (label: string, x: number, on: boolean, fn: () => void) => {
-      if (art) { ui.area(x, Y + 98, 51, 22, fn); if (on) { c.fillStyle = 'rgba(255,220,140,0.22)'; c.fillRect(x, Y + 98, 51, 22); } }
-      else ui.button(label, x, Y + 98, 51, 22, fn, { on, size: 10 });
+  // ---------- Immortal-style controls (css px) ----------
+  drawControls(ui: UI) {
+    const g = this.g(), c = ui.c, h = g.hero, d = g.d, { W, H, inset } = this.lay;
+    const L = inset.l + 10, Tp = inset.t + 8, R = W - inset.r - 10;
+    // --- status: level badge + life/mana/XP bars (top-left) ---
+    const bw = Math.min(190, W * 0.24);
+    c.fillStyle = 'rgba(10,8,6,0.75)'; c.fillRect(L - 4, Tp - 4, bw + 52, 52);
+    c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(L - 3.5, Tp - 3.5, bw + 51, 51);
+    c.fillStyle = '#2a1a10'; c.beginPath(); c.arc(L + 18, Tp + 22, 18, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#c8a060'; c.lineWidth = 2; c.stroke();
+    ui.text(`${h.clvl}`, L + 18, Tp + 23, { align: 'center', size: 16, bold: true, color: '#e8c040' });
+    const bar = (y: number, hgt: number, f: number, col: string, label: string) => {
+      c.fillStyle = '#1a0e08'; c.fillRect(L + 42, y, bw, hgt);
+      c.fillStyle = col; c.fillRect(L + 42, y, bw * Math.max(0, Math.min(1, f)), hgt);
+      c.strokeStyle = '#5a4a2a'; c.strokeRect(L + 42.5, y + 0.5, bw - 1, hgt - 1);
+      if (label) ui.text(label, L + 42 + bw / 2, y + hgt / 2 + 1, { align: 'center', size: 10, color: '#fff' });
     };
-    btn('CHAR', 175, this.left === 'char', () => { this.left = this.left === 'char' ? 'none' : 'char'; });
-    btn('INV', 233, this.right === 'inv', () => { this.right = this.right === 'inv' ? 'none' : 'inv'; });
-    btn('SPELLS', 291, this.right === 'spell', () => { this.right = this.right === 'spell' ? 'none' : 'spell'; });
-    btn('QUEST', 349, this.left === 'quest', () => { this.left = this.left === 'quest' ? 'none' : 'quest'; });
-    btn('MENU', 407, false, () => { this.menu = this.menu === 'none' ? 'main' : 'none'; });
-    ui.button('MAP', 464, Y + 98, 40, 22, () => { this.map = !this.map; }, { on: this.map, size: 10 });
-    const sk = skillLabel(g, h.skill);
-    ui.button(sk, 124, Y + 36, 62, 52, () => this.skillButton(), { on: this.skillArmed, size: 9 });
-    // belt
-    for (let i = 0; i < 8; i++) {
-      const x = 194 + i * 32, y = Y + 36, it = h.belt[i];
-      if (!art) { c.fillStyle = '#15120d'; c.fillRect(x, y, 28, 28); c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, y + 0.5, 27, 27); ui.text(`${i + 1}`, x + 4, y + 6, { size: 8, color: '#9a8a62' }); }
-      if (it) drawIcon(c, it, x + 1, y + 1, 26, 26);
-      ui.area(x, y, 28, 28, () => { if (it) { if (g.pendingPick) { g.pickItem(it); return; } g.useItem(it); g.refresh(); } }, () => { if (it) this.sel = it; });
+    bar(Tp, 16, h.hp / Math.max(1, d.maxHp), g.manaShield ? '#8050c0' : '#a01010', `${Math.ceil(h.hp)} / ${d.maxHp}`);
+    bar(Tp + 19, 13, d.maxMana ? h.mana / d.maxMana : 0, '#2040c0', `${Math.floor(h.mana)} / ${d.maxMana}`);
+    const lo = EXP_LEVELS[h.clvl - 1] ?? 0, hi = EXP_LEVELS[h.clvl] ?? lo + 1;
+    bar(Tp + 35, 6, h.clvl >= 50 ? 1 : (h.exp - lo) / (hi - lo), '#c8a040', '');
+    ui.area(L - 4, Tp - 4, bw + 52, 52, () => { this.left = this.left === 'char' ? 'none' : 'char'; });
+    if (h.statPts) { c.fillStyle = '#e8c040'; c.beginPath(); c.arc(L + 32, Tp + 6, 6, 0, Math.PI * 2); c.fill(); ui.text('+', L + 32, Tp + 7, { align: 'center', size: 11, bold: true, color: '#000' }); }
+    // --- minimap (top-right, tap = full automap) + icon buttons ---
+    const mw = 132, mh = 88, mx = R - mw, my = Tp - 4;
+    this.drawMinimap(ui, mx, my, mw, mh);
+    ui.area(mx, my, mw, mh, () => { this.map = !this.map; });
+    const icons: [string, boolean, () => void][] = [
+      ['inv', this.right === 'inv', () => { this.right = this.right === 'inv' ? 'none' : 'inv'; }],
+      ['char', this.left === 'char', () => { this.left = this.left === 'char' ? 'none' : 'char'; }],
+      ['spell', this.right === 'spell', () => { this.right = this.right === 'spell' ? 'none' : 'spell'; }],
+      ['quest', this.left === 'quest', () => { this.left = this.left === 'quest' ? 'none' : 'quest'; }],
+      ['menu', false, () => { this.menu = 'main'; }],
+    ];
+    const isz = 38;
+    icons.forEach(([k, on, fn], i) => {
+      const x = mx - 8 - (icons.length - i) * (isz + 6), y = my;
+      c.fillStyle = on ? 'rgba(90,70,40,0.9)' : 'rgba(20,16,10,0.8)'; c.fillRect(x, y, isz, isz);
+      c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, isz - 1, isz - 1);
+      drawGlyph(c, k, x + isz / 2, y + isz / 2);
+      ui.area(x - 3, y - 3, isz + 6, isz + 6, fn);
+    });
+    // --- message line ---
+    if (g.msgT > 0) {
+      c.font = '13px serif'; const tw = c.measureText(g.msg).width + 20;
+      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(W / 2 - tw / 2, Tp + 64, tw, 22);
+      ui.text(g.msg, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
+    } else if (g.pendingPick) ui.text(`Tap an item to ${g.pendingPick}`, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
+    // --- joystick ---
+    const j = this.joy;
+    const jo = j ?? { ox: L + 86, oy: H - inset.b - 90, tx: L + 86, ty: H - inset.b - 90 };
+    c.globalAlpha = j ? 0.75 : 0.28;
+    c.strokeStyle = '#c8a060'; c.lineWidth = 2; c.beginPath(); c.arc(jo.ox, jo.oy, JOY_RADIUS, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = 'rgba(40,30,20,0.5)'; c.fill();
+    const k = knob(jo.ox, jo.oy, jo.tx, jo.ty);
+    c.fillStyle = '#8a6a3a'; c.beginPath(); c.arc(k.x, k.y, 24, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#e8c890'; c.stroke();
+    c.globalAlpha = 1;
+    // --- action cluster (bottom-right) ---
+    if (this.right !== 'none') return; // the right panel covers it
+    const A = actionLayout(W, H, inset);
+    const busy = g.p.state === 'attack' || g.p.state === 'cast' ? Math.max(0, g.p.t / Math.max(0.01, g.actTotal)) : 0;
+    const circle = (x: number, y: number, r: number, fill: string, edge: string) => {
+      c.fillStyle = fill; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.strokeStyle = edge; c.lineWidth = 2; c.stroke();
+    };
+    const sweep = (x: number, y: number, r: number, f: number, col = 'rgba(0,0,0,0.6)') => {
+      if (f <= 0) return; c.fillStyle = col; c.beginPath(); c.moveTo(x, y); c.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f); c.closePath(); c.fill();
+    };
+    // ATTACK
+    const a = A.atk;
+    circle(a.x, a.y, a.r, this.attackDown ? '#7a2a1a' : '#4a1a10', '#d8a050');
+    drawGlyph(c, d.bow ? 'bow' : 'sword', a.x, a.y - 4, 1.6);
+    ui.text('ATTACK', a.x, a.y + 26, { align: 'center', size: 10, bold: true, color: '#e8d8a8' });
+    ui.press(a.x - a.r - 6, a.y - a.r - 6, a.r * 2 + 12, a.r * 2 + 12, () => { this.attackDown = true; g.attackHeld = true; }, () => { this.attackDown = false; g.attackHeld = false; });
+    // class skill
+    const sk = A.skill, skl = { warrior: 'Repair', rogue: 'Disarm', sorcerer: 'Recharge' }[h.cls];
+    circle(sk.x, sk.y, sk.r, '#2a2418', '#8a7a52'); drawGlyph(c, h.cls === 'warrior' ? 'hammer' : h.cls === 'rogue' ? 'trap' : 'staff', sk.x, sk.y - 3);
+    ui.text(skl, sk.x, sk.y + 15, { align: 'center', size: 8, color: '#d8c89a' });
+    ui.area(sk.x - sk.r - 4, sk.y - sk.r - 4, sk.r * 2 + 8, sk.r * 2 + 8, () => { g.classSkill(); });
+    // spell slots
+    h.slots.slice(0, SLOT_COUNT).forEach((id, i) => {
+      const s = A.slots[i];
+      circle(s.x, s.y, s.r, '#1a1a2a', id ? '#8a8ad0' : '#4a4232');
+      if (!id) { ui.text('+', s.x, s.y + 1, { align: 'center', size: 18, color: '#6a6050' }); ui.area(s.x - s.r - 4, s.y - s.r - 4, s.r * 2 + 8, s.r * 2 + 8, () => { this.right = 'spell'; }); return; }
+      const src = g.spellSource(id), sp = SPELLS[src?.spell ?? id.replace(/^(scroll|staff):/, '')];
+      drawGlyph(c, `sp_${sp?.type ?? 'magic'}`, s.x, s.y - 4);
+      ui.text(shortName(sp?.name ?? id), s.x, s.y + 13, { align: 'center', size: 8, color: '#e8e8ff' });
+      let blocked = !src;
+      if (src?.from === 'spell' && sp) { const cost = spellMana(sp, Math.max(1, h.spells[sp.id] ?? 1)); if (h.mana < cost) { blocked = true; sweep(s.x, s.y, s.r, 1, 'rgba(20,40,160,0.55)'); } }
+      if (src?.from === 'staff') ui.text(`${src.item!.charges}`, s.x + s.r - 4, s.y - s.r + 6, { align: 'center', size: 10, bold: true, color: '#e8c040' });
+      if (id.startsWith('scroll:')) { const n = [...h.belt, ...h.inv.map((e) => e.item)].filter((it) => it && it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell]?.id === id.slice(7)).length; ui.text(`${n}`, s.x + s.r - 4, s.y - s.r + 6, { align: 'center', size: 10, bold: true, color: '#e8c040' }); }
+      if (!src) sweep(s.x, s.y, s.r, 1, 'rgba(0,0,0,0.65)');
+      sweep(s.x, s.y, s.r, busy);
+      void blocked;
+      ui.area(s.x - s.r - 4, s.y - s.r - 4, s.r * 2 + 8, s.r * 2 + 8, () => g.castSlot(i), () => { this.right = 'spell'; this.spellSel = id; });
+    });
+    sweep(sk.x, sk.y, sk.r, busy);
+    // potions (from the belt)
+    const pot = (P: { x: number; y: number; r: number }, life: boolean) => {
+      const want = life ? ['IMISC_HEAL', 'IMISC_FULLHEAL', 'IMISC_REJUV', 'IMISC_FULLREJUV'] : ['IMISC_MANA', 'IMISC_FULLMANA', 'IMISC_REJUV', 'IMISC_FULLREJUV'];
+      const n = h.belt.filter((b) => b && want.includes(b.misc)).length;
+      circle(P.x, P.y, P.r, n ? (life ? '#5a1010' : '#10205a') : '#222', '#8a7a52');
+      drawGlyph(c, life ? 'pot_red' : 'pot_blue', P.x, P.y - 2);
+      ui.text(`${n}`, P.x + P.r - 3, P.y + P.r - 5, { align: 'center', size: 11, bold: true, color: '#fff' });
+      ui.area(P.x - P.r - 5, P.y - P.r - 5, P.r * 2 + 10, P.r * 2 + 10, () => this.quickPotion(life));
+    };
+    pot(A.hpPot, true); pot(A.mpPot, false);
+    // contextual INTERACT
+    const it = g.interaction();
+    if (it) {
+      const b = A.interact;
+      c.fillStyle = 'rgba(60,46,24,0.92)'; c.beginPath(); c.roundRect(b.x, b.y, b.w, b.h, 18); c.fill(); c.strokeStyle = '#e8c070'; c.lineWidth = 2; c.stroke();
+      ui.text(it.label.length > 22 ? it.label.slice(0, 21) + '...' : it.label, b.x + b.w / 2, b.y + b.h / 2 + 1, { align: 'center', size: 12, bold: true, color: '#fff0c8' });
+      ui.area(b.x - 4, b.y - 6, b.w + 8, b.h + 12, () => g.interact());
     }
-    // info line (covers the art's sample text) + status line under the belt
-    c.fillStyle = '#100d0a'; c.fillRect(134, Y + 9, 372, 20);
-    let line: [string, string];
-    if (g.msgT > 0) line = [g.msg, '#e8d8a8'];
-    else if (g.pendingPick) line = [`Tap an item to ${g.pendingPick}`, '#e8d8a8'];
-    else if (this.skillArmed) line = [`Tap a target to cast ${sk}`, '#9cf'];
-    else line = [`Level ${h.clvl}  |  ${g.cur === 'town' ? 'Tristram' : 'Cathedral level 1'}  |  ${h.name}${h.statPts ? `  |  +${h.statPts} points` : ''}`, '#e8d8a8'];
-    ui.text(line[0].length > 60 ? line[0].slice(0, 59) + '...' : line[0], 320, Y + 19, { align: 'center', size: 11, color: line[1] });
-    ui.text(`Life ${Math.ceil(h.hp)}/${d.maxHp}   Mana ${Math.floor(h.mana)}/${d.maxMana}   Gold ${h.gold}`, 322, Y + 80, { align: 'center', size: 10, color: '#d8c89a' });
+  }
+  drawMinimap(ui: UI, x: number, y: number, w: number, hh: number) {
+    const g = this.g(), lv = g.level, m = lv.map, c = ui.c, s = 2.2, town = lv.id === 'town';
+    c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(x, y, w, hh); c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, hh - 1);
+    c.save(); c.beginPath(); c.rect(x + 1, y + 1, w - 2, hh - 2); c.clip();
+    const cx = x + w / 2, cy = y + hh / 2, R = 30;
+    for (let ty = Math.max(0, g.p.ty - R); ty < Math.min(m.h, g.p.ty + R); ty++) for (let tx = Math.max(0, g.p.tx - R); tx < Math.min(m.w, g.p.tx + R); tx++) {
+      if (!town && !lv.explored[ty * m.w + tx]) continue;
+      const t = m.tiles[ty * m.w + tx];
+      const col = t === T.WALL || t === T.HOUSE || t === T.PILLAR ? '#a89060' : t === T.DOOR || t === T.DOOR_OPEN ? '#c86030' : t === T.UP || t === T.DOWN ? '#ffffff' : t === T.WATER ? '#2040a0' : t === T.TREE ? '#2a4a20' : '';
+      if (!col) continue;
+      c.fillStyle = col; c.fillRect(cx + (tx - g.p.x - (ty - g.p.y)) * s - 1, cy + (tx - g.p.x + (ty - g.p.y)) * s / 2 - 1, 2.4, 1.6);
+    }
+    for (const mo of lv.monsters) if (mo.alive && (town || lv.explored[mo.ty * m.w + mo.tx]) && Math.hypot(mo.tx - g.p.tx, mo.ty - g.p.ty) < 9) { c.fillStyle = '#ff3030'; c.fillRect(cx + (mo.x - g.p.x - (mo.y - g.p.y)) * s - 1, cy + (mo.x - g.p.x + (mo.y - g.p.y)) * s / 2 - 1, 3, 3); }
+    for (const n of g.npcs()) { c.fillStyle = '#40e040'; c.fillRect(cx + (n.x - g.p.x - (n.y - g.p.y)) * s - 1, cy + (n.x - g.p.x + (n.y - g.p.y)) * s / 2 - 1, 3, 3); }
+    c.fillStyle = '#ffd040'; c.fillRect(cx - 2, cy - 2, 4, 4);
+    c.restore();
   }
   quickPotion(life: boolean) {
     const g = this.g(), h = g.hero;
@@ -88,40 +227,34 @@ export class Hud {
     const it = h.belt.find((b) => b && want.includes(b.misc));
     if (it) { g.useItem(it); g.refresh(); } else g.say(life ? 'No healing potion in the belt' : 'No mana potion in the belt', 1.5);
   }
-  skillButton() {
-    const g = this.g(), h = g.hero;
-    if (h.skill === 'skill') { g.classSkill(); return; }
-    const src = g.spellSource(h.skill);
-    const s = src ? SPELLS[src.spell] : null;
-    if (s && !s.targeted) { g.castAt(g.p.tx, g.p.ty); return; }
-    this.skillArmed = !this.skillArmed;
-  }
 
-  // ---------- char sheet ----------
+  // ---------- char sheet (panel space, left) ----------
   drawChar(ui: UI) {
     const g = this.g(), h = g.hero, d = derive(h);
-    ui.panel(0, 0, 320, PLAY_H);
-    ui.text(h.name, 20, 20, { size: 15, bold: true }); ui.text(CLASSES[h.cls].name, 200, 20, { size: 13 });
-    ui.text(`Level ${h.clvl}`, 20, 44); ui.text(`Experience ${h.exp}`, 120, 44);
-    ui.text(`Next level ${h.clvl >= 50 ? 'None' : EXP_LEVELS[h.clvl]}`, 120, 62);
+    ui.panel(0, 0, 320, PS_H);
+    this.closeBtn(ui, 286, 4, () => { this.left = 'none'; });
+    ui.text(h.name, 20, 22, { size: 15, bold: true }); ui.text(CLASSES[h.cls].name, 190, 22, { size: 13 });
+    ui.text(`Level ${h.clvl}`, 20, 46); ui.text(`Experience ${h.exp}`, 120, 46);
+    ui.text(`Next level ${h.clvl >= 50 ? 'None' : EXP_LEVELS[h.clvl]}`, 120, 64);
     const rows: [string, 'str' | 'mag' | 'dex' | 'vit', number][] = [['Strength', 'str', d.str], ['Magic', 'mag', d.mag], ['Dexterity', 'dex', d.dex], ['Vitality', 'vit', d.vit]];
     rows.forEach(([n, k, v], i) => {
-      const y = 92 + i * 26;
+      const y = 96 + i * 30;
       ui.text(n, 20, y); ui.text(`${h.base[k]}`, 120, y, { align: 'right' }); ui.text(`${v}`, 170, y, { align: 'right', color: v > h.base[k] ? '#6a8aff' : v < h.base[k] ? '#d04040' : '#d8c89a' });
-      if (h.statPts > 0 && h.base[k] < CLASSES[h.cls].max[k]) ui.button('+', 182, y - 10, 22, 20, () => { spendStat(h, k); g.refresh(); });
+      if (h.statPts > 0 && h.base[k] < CLASSES[h.cls].max[k]) ui.button('+', 186, y - 13, 32, 26, () => { spendStat(h, k); g.refresh(); }, { size: 16 });
     });
-    if (h.statPts) ui.text(`Points to distribute: ${h.statPts}`, 20, 196, { color: '#e8c040' });
+    if (h.statPts) ui.text(`Points to distribute: ${h.statPts}`, 20, 214, { color: '#e8c040' });
     const r: [string, string][] = [
       ['Gold', `${h.gold}`], ['Armor class', `${d.ac}`], ['To hit', `${50 + Math.floor(d.dex / 2) + d.toHit + h.clvl + (h.cls === 'warrior' ? 20 : 0)}%`],
       ['Damage', `${d.minDam + d.charDamMod + d.damMod}-${Math.trunc(d.maxDam * (100 + d.pctDam) / 100) + d.charDamMod + d.damMod}`],
       ['Life', `${Math.ceil(h.hp)}/${d.maxHp}`], ['Mana', `${Math.floor(h.mana)}/${d.maxMana}`],
       ['Resist magic', `${d.mr}%`], ['Resist fire', `${d.fr}%`], ['Resist lightning', `${d.lr}%`],
     ];
-    r.forEach(([a, b], i) => { const col = i < 5 ? 0 : 1; const y = 218 + (i % 5) * 24; ui.text(a, 20 + col * 160, y, { size: 11 }); ui.text(b, 140 + col * 160, y, { size: 11, align: 'right' }); });
+    r.forEach(([a, b], i) => { const col = i < 5 ? 0 : 1; const y = 236 + (i % 5) * 22; ui.text(a, 20 + col * 160, y, { size: 11 }); ui.text(b, 140 + col * 160, y, { size: 11, align: 'right' }); });
   }
   drawQuest(ui: UI) {
     const g = this.g();
-    ui.panel(0, 0, 320, PLAY_H);
+    ui.panel(0, 0, 320, PS_H);
+    this.closeBtn(ui, 286, 4, () => { this.left = 'none'; });
     ui.text('Quest log', 160, 24, { align: 'center', size: 16, bold: true });
     const q = g.quests.butcher;
     if (q === 'inactive') ui.text('No active quests', 160, 70, { align: 'center' });
@@ -131,91 +264,142 @@ export class Hud {
     }
   }
 
-  // ---------- inventory ----------
+  // ---------- inventory (panel space, right; 31 px cells vs D1's 28) ----------
   static SLOT_RECT: Record<BodySlot, [number, number, number, number]> = {
-    // matches the CC0 inventory panel art (ui/panel-inventory.png)
-    head: [130, 40, 56, 56], amulet: [196, 48, 28, 28], chest: [130, 100, 56, 84], handL: [72, 80, 28, 84], handR: [196, 100, 56, 84], ringL: [72, 170, 28, 28], ringR: [226, 170, 28, 28],
+    handL: [8, 44, 64, 96], head: [128, 36, 64, 64], amulet: [212, 44, 32, 32], chest: [128, 104, 64, 96], handR: [248, 44, 64, 96], ringL: [24, 152, 32, 32], ringR: [264, 152, 32, 32],
   };
+  static CELL = 31;
   drawInv(ui: UI) {
-    const g = this.g(), h = g.hero, c = ui.c, X = 320;
-    const art = drawImg(c, 'ui/panel-inventory', X, 0);
-    if (art) ui.block(X, 0, 320, PLAY_H); else ui.panel(X, 0, 320, PLAY_H);
+    const g = this.g(), h = g.hero, c = ui.c, X = 320, dh = derive(h);
+    ui.panel(X, 0, 320, PS_H);
+    ui.text('Inventory', X + 160, 20, { align: 'center', size: 15, bold: true });
+    this.closeBtn(ui, X + 286, 4, () => { this.right = 'none'; this.sel = null; });
+    const lbl: Record<BodySlot, string> = { head: 'Head', amulet: 'Amu', chest: 'Body', handL: 'Weapon', handR: 'Shield', ringL: 'Ring', ringR: 'Ring' };
     for (const s of BODY_SLOTS) {
       const [x, y, w, hh] = Hud.SLOT_RECT[s];
-      if (!art) { c.fillStyle = '#15120d'; c.fillRect(X + x, y, w, hh); c.strokeStyle = '#6a5a3a'; c.strokeRect(X + x + 0.5, y + 0.5, w - 1, hh - 1); }
       const it = h.body[s];
-      if (it) { if (!reqOk(h, it, derive(h))) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); } drawIcon(c, it, X + x + 2, y + 2, w - 4, hh - 4); }
-      ui.area(X + x, y, w, hh, () => { if (it) this.tapItem(it); }, () => { if (it) this.sel = it; });
+      c.fillStyle = this.sel && this.sel === it ? 'rgba(80,80,140,0.8)' : '#15120d'; c.fillRect(X + x, y, w, hh); c.strokeStyle = '#6a5a3a'; c.lineWidth = 1; c.strokeRect(X + x + 0.5, y + 0.5, w - 1, hh - 1);
+      if (it) { if (!reqOk(h, it, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); } drawIcon(c, it, X + x + 2, y + 2, w - 4, hh - 4); }
+      else ui.text(lbl[s], X + x + w / 2, y + hh / 2, { align: 'center', size: 9, color: '#5a4e38' });
+      ui.area(X + x, y, w, hh, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
     }
-    const gx = X + 20, gy = 220, cs = 28;
-    if (!art) for (let yy = 0; yy < INV_H; yy++) for (let xx = 0; xx < INV_W; xx++) { c.fillStyle = '#15120d'; c.fillRect(gx + xx * cs, gy + yy * cs, cs - 1, cs - 1); }
+    const cs = Hud.CELL, gx = X + (320 - INV_W * cs) / 2, gy = 208;
+    for (let yy = 0; yy < INV_H; yy++) for (let xx = 0; xx < INV_W; xx++) { c.fillStyle = '#15120d'; c.fillRect(gx + xx * cs, gy + yy * cs, cs - 1, cs - 1); }
     for (const e of h.inv) {
       const x = gx + e.x * cs, y = gy + e.y * cs, w = e.item.w * cs - 1, hh = e.item.h * cs - 1;
-      c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.6)' : art ? 'rgba(40,30,20,0.35)' : '#221d15'; c.fillRect(x, y, w, hh);
-      if (!reqOk(h, e.item, derive(h))) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(x, y, w, hh); }
+      c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.8)' : '#221d15'; c.fillRect(x, y, w, hh);
+      if (!reqOk(h, e.item, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(x, y, w, hh); }
       drawIcon(c, e.item, x + 1, y + 1, w - 2, hh - 2);
-      ui.area(x, y, w, hh, () => this.tapItem(e.item), () => { this.sel = e.item; });
+      ui.area(x, y, w, hh, () => this.tapItem(e.item), () => { this.info = e.item; });
     }
-    if (art) ui.text(`${h.gold}`, X + 64, 338, { size: 11, color: '#e8c040' }); else ui.text(`Gold: ${h.gold}`, X + 160, 345, { align: 'center', size: 11, color: '#e8c040' });
+    ui.text(`Gold: ${h.gold}`, X + 160, 340, { align: 'center', size: 12, color: '#e8c040' });
+    if (this.sel) ui.text('Tap again to use / equip  -  hold for info', X + 160, 196, { align: 'center', size: 9, color: '#9a8a62' });
+    // the belt (8 slots) sits in the left half while the inventory is open
+    if (this.left === 'none') {
+      const bx = 24, by = 280, bc = 34;
+      ui.panel(bx - 8, by - 26, 8 * bc + 16, bc + 36);
+      ui.text('Belt', bx, by - 12, { size: 11, color: '#d8b860' });
+      for (let i = 0; i < 8; i++) {
+        const it = h.belt[i], x = bx + i * bc;
+        c.fillStyle = this.sel && this.sel === it ? 'rgba(80,80,140,0.8)' : '#15120d'; c.fillRect(x, by, bc - 2, bc - 2);
+        c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, by + 0.5, bc - 3, bc - 3);
+        ui.text(`${i + 1}`, x + 5, by + 6, { size: 8, color: '#6a5a3a' });
+        if (it) drawIcon(c, it, x + 2, by + 2, bc - 6, bc - 6);
+        ui.area(x, by, bc - 2, bc - 2, () => { if (it) this.tapItem(it); }, () => { if (it) this.info = it; });
+      }
+    }
   }
+  /** Tap = select; tap the selected item again = its main action (equip / unequip / use). */
   tapItem(it: Item) {
     const g = this.g();
     if (g.pendingPick) { g.pickItem(it); return; }
-    this.sel = this.sel === it ? null : it;
+    if (this.sel !== it) { this.sel = it; return; }
+    this.sel = null;
+    this.primary(it);
+  }
+  primary(it: Item) {
+    const g = this.g(), h = g.hero;
+    const worn = BODY_SLOTS.some((s) => h.body[s] === it);
+    if (worn) { const e = unequip(h, it); if (e) g.say(e); }
+    else if (it.loc !== 'ILOC_UNEQUIPABLE' && it.loc !== 'ILOC_BELT') { const e = equip(h, it); if (e) g.say(e); }
+    else if (usable(it)) g.useItem(it);
+    else this.info = it;
+    g.refresh();
   }
   drawItemInfo(ui: UI, it: Item) {
     const g = this.g(), h = g.hero;
-    const x = 160, y = 40, w = 320;
+    const x = 140, y = 30, w = 360;
     const lines = itemLines(it, h.clvl);
-    const hh = 54 + lines.length * 15 + 40;
+    const hh = 54 + lines.length * 15 + 50;
+    ui.block(-1000, -1000, 4000, 4000);
     ui.panel(x, y, w, hh);
-    ui.text(it.identified || !it.magical ? it.iname : it.name, x + w / 2, y + 18, { align: 'center', size: 13, bold: true, color: itemColor(it) });
-    lines.forEach(([s, col], i) => ui.text(s, x + w / 2, y + 40 + i * 15, { align: 'center', size: 11, color: col }));
-    const by = y + hh - 34;
+    this.closeBtn(ui, x + w - 34, y + 4, () => { this.info = null; });
+    ui.text(it.identified || !it.magical ? it.iname : it.name, x + w / 2 - 10, y + 20, { align: 'center', size: 13, bold: true, color: itemColor(it) });
+    lines.forEach(([s, col], i) => ui.text(s, x + w / 2, y + 44 + i * 15, { align: 'center', size: 11, color: col }));
+    const by = y + hh - 42;
     const worn = BODY_SLOTS.some((s) => h.body[s] === it);
     const inPack = h.inv.some((e) => e.item === it);
     const inBelt = h.belt.includes(it);
+    const done = () => { g.refresh(); this.info = null; this.sel = null; };
     const btns: [string, () => void][] = [];
-    if (worn) btns.push(['Unequip', () => { const e = unequip(h, it); if (e) g.say(e); g.refresh(); this.sel = null; }]);
-    else if (it.loc !== 'ILOC_UNEQUIPABLE' && it.loc !== 'ILOC_BELT') btns.push(['Equip', () => { const e = equip(h, it); if (e) g.say(e); g.refresh(); this.sel = null; }]);
-    if (it.misc !== 'IMISC_NONE' && it.misc !== 'IMISC_STAFF' && it.misc !== 'IMISC_UNIQUE' && it.loc === 'ILOC_UNEQUIPABLE' || it.misc === 'IMISC_BOOK') btns.push(['Use', () => { g.useItem(it); g.refresh(); this.sel = null; }]);
-    if (inPack && isBeltable(it) && h.belt.includes(null)) btns.push(['To belt', () => { removeItem(h, it); h.belt[h.belt.indexOf(null)] = it; this.sel = null; }]);
-    if (inBelt) btns.push(['To pack', () => { removeItem(h, it); if (!pickUpPack(h, it)) { h.belt[h.belt.indexOf(null)] = it; g.say('No room'); } this.sel = null; }]);
-    if (!g.dialog) btns.push(['Drop', () => { removeItem(h, it); g.drop(it, g.p.tx, g.p.ty); g.refresh(); this.sel = null; }]);
-    btns.push(['Close', () => { this.sel = null; }]);
-    const bw = Math.min(72, (w - 20) / btns.length - 4);
-    btns.forEach(([l, f], i) => ui.button(l, x + 10 + i * (bw + 4), by, bw, 26, f));
+    if (worn) btns.push(['Unequip', () => { const e = unequip(h, it); if (e) g.say(e); done(); }]);
+    else if (it.loc !== 'ILOC_UNEQUIPABLE' && it.loc !== 'ILOC_BELT') btns.push(['Equip', () => { const e = equip(h, it); if (e) g.say(e); done(); }]);
+    if (usable(it)) btns.push(['Use', () => { g.useItem(it); done(); }]);
+    if (it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell] && SPELLS[SPELL_BY_D1[it.spell].id]?.targeted !== undefined) {
+      const id = `scroll:${SPELL_BY_D1[it.spell].id}`;
+      btns.push(['To slot', () => { const free = h.slots.indexOf(null); h.slots = assignSlot(h.slots, free >= 0 ? free : SLOT_COUNT - 1, id); g.say(`Scroll assigned to slot ${(free >= 0 ? free : SLOT_COUNT - 1) + 1}`); done(); }]);
+    }
+    if (inPack && isBeltable(it) && h.belt.includes(null)) btns.push(['To belt', () => { removeItem(h, it); h.belt[h.belt.indexOf(null)] = it; done(); }]);
+    if (inBelt) btns.push(['To pack', () => { removeItem(h, it); if (!pickUpPack(h, it)) { h.belt[h.belt.indexOf(null)] = it; g.say('No room'); } done(); }]);
+    if (!g.dialog) btns.push(['Drop', () => { removeItem(h, it); g.drop(it, g.p.tx, g.p.ty); done(); }]);
+    const bw = Math.min(80, (w - 20) / btns.length - 6);
+    btns.forEach(([l, f], i) => ui.button(l, x + 10 + i * (bw + 6), by, bw, 34, f, { size: 12 }));
   }
 
-  // ---------- spellbook ----------
+  // ---------- spellbook (panel space, right): tap a spell, then a slot ----------
   drawSpells(ui: UI) {
     const g = this.g(), h = g.hero, X = 320;
-    ui.panel(X, 0, 320, PLAY_H);
+    ui.panel(X, 0, 320, PS_H);
     ui.text('Spellbook', X + 160, 22, { align: 'center', size: 16, bold: true });
-    const entries: [string, string, string][] = [['skill', `Skill: ${CLASSES[h.cls].skill === 'repair' ? 'Item Repair' : CLASSES[h.cls].skill === 'disarm' ? 'Trap Disarm' : 'Staff Recharge'}`, '']];
+    this.closeBtn(ui, X + 286, 4, () => { this.right = 'none'; });
+    const entries: [string, string, string][] = [];
     for (const [id, lv] of Object.entries(h.spells)) { const s = SPELLS[id]; if (s) entries.push([id, `${s.name}  (level ${lv})`, `Mana ${spellMana(s, lv)}${CASTABLE.has(id) ? '' : '  - not in this build'}`]); }
     const st = h.body.handL;
     if (st?.itype === 'ITYPE_STAFF' && SPELL_BY_D1[st.spell]) { const s = SPELL_BY_D1[st.spell]; entries.push([`staff:${s.id}`, `Staff: ${s.name}`, `${st.charges}/${st.maxCharges} charges`]); }
     const scrolls = new Map<string, number>();
     for (const it of [...h.belt, ...h.inv.map((e) => e.item)]) if (it && it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell]) { const id = SPELL_BY_D1[it.spell].id; scrolls.set(id, (scrolls.get(id) ?? 0) + 1); }
     for (const [id, n] of scrolls) entries.push([`scroll:${id}`, `Scroll: ${SPELLS[id].name}`, `${n} in pack/belt`]);
-    entries.forEach(([id, a, b], i) => {
-      const y = 50 + i * 40;
-      ui.button('', X + 14, y, 292, 36, () => { h.skill = id; this.skillArmed = false; g.say(`Selected: ${skillLabel(g, id)}`, 1.5); }, { on: h.skill === id });
-      ui.text(a, X + 24, y + 12, { size: 12 }); ui.text(b, X + 24, y + 27, { size: 10, color: '#9a8a62' });
+    if (!entries.length) ui.wrap('No spells yet. Read books, or carry scrolls or a staff, to fill the skill slots.', X + 20, 70, 280, 16, { align: 'center' });
+    entries.slice(0, 6).forEach(([id, a, b], i) => {
+      const y = 44 + i * 40, slot = h.slots.indexOf(id);
+      ui.button('', X + 12, y, 296, 36, () => {
+        if (this.spellSel === id && slot < 0) { const free = h.slots.indexOf(null); if (free >= 0) h.slots = assignSlot(h.slots, free, id); }
+        this.spellSel = id;
+      }, { on: this.spellSel === id });
+      ui.text(a, X + 22, y + 12, { size: 12 }); ui.text(b, X + 22, y + 27, { size: 10, color: '#9a8a62' });
+      if (slot >= 0) ui.text(`slot ${slot + 1}`, X + 298, y + 18, { align: 'right', size: 10, color: '#9cf' });
     });
+    // slot row
+    ui.text(this.spellSel ? `Assign ${skillLabel(g, this.spellSel)} to:` : 'Tap a spell, then a slot', X + 160, 292, { align: 'center', size: 11, color: '#d8b860' });
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const id = h.slots[i], x = X + 14 + i * 74;
+      ui.button(id ? shortName(skillLabel(g, id)) : `Slot ${i + 1}`, x, 304, 68, 40, () => {
+        if (this.spellSel) { h.slots = assignSlot(h.slots, i, this.spellSel); this.spellSel = null; }
+        else if (id) h.slots = assignSlot(h.slots, i, null);
+      }, { size: 10, on: !!id });
+    }
   }
 
-  // ---------- automap ----------
+  // ---------- full automap (css px) ----------
   drawAutomap(ui: UI) {
-    const g = this.g(), lv = g.level, m = lv.map, c = ui.c, s = 4;
-    const cx = VIEW_W / 2, cy = PLAY_H / 2;
+    const g = this.g(), lv = g.level, m = lv.map, c = ui.c, s = 5, { W, H } = this.lay;
+    const cx = W / 2, cy = H / 2;
     c.save(); c.globalAlpha = 0.85;
     for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
-      if (!lv.explored[y * m.w + x]) continue;
+      if (!lv.explored[y * m.w + x] && lv.id !== 'town') continue;
       const t = m.tiles[y * m.w + x];
       const px = cx + (x - g.p.x - (y - g.p.y)) * s, py = cy + (x - g.p.x + (y - g.p.y)) * s / 2;
-      if (px < 0 || py < 0 || px > VIEW_W || py > PLAY_H) continue;
+      if (px < 0 || py < 0 || px > W || py > H) continue;
       if (t === T.WALL || t === T.HOUSE || t === T.PILLAR) { c.fillStyle = '#a89060'; c.fillRect(px - 1, py - 1, 3, 2); }
       else if (t === T.DOOR || t === T.DOOR_OPEN) { c.fillStyle = '#c86030'; c.fillRect(px - 2, py - 1, 4, 3); }
       else if (t === T.UP || t === T.DOWN) { c.fillStyle = '#ffffff'; c.fillRect(px - 2, py - 2, 5, 4); }
@@ -233,6 +417,7 @@ export class Hud {
     ui.text(n.name, x + w / 2, y + 20, { align: 'center', size: 15, bold: true, color: '#e8c040' });
     const close = () => { g.dialog = null; this.store = 'menu'; this.pick = null; this.scroll = 0; };
     const back = () => { this.store = 'menu'; this.pick = null; this.scroll = 0; };
+    this.closeBtn(ui, x + w - 36, y + 6, close);
     if (this.store === 'menu' || this.store === 'talk') {
       const ty = ui.wrap(this.store === 'talk' ? dlg.text : tx.greet, x + 30, y + 52, w - 60, 16, { align: 'center' });
       tx.menu.forEach((label, i) => {
@@ -261,7 +446,7 @@ export class Hud {
     const by = y + hh - 34;
     const sel = list.find((e) => e.item === this.pick);
     ui.button(verb(this.store), x + 16, by, 110, 26, () => { if (sel) this.storeDo(sel.item, sel.price); }, { disabled: !sel });
-    if (this.pick) ui.button('Info', x + 132, by, 70, 26, () => { this.sel = this.pick; });
+    if (this.pick) ui.button('Info', x + 132, by, 70, 26, () => { this.info = this.pick; });
     ui.button('Back', x + w - 96, by, 80, 26, back);
     ui.text(`Your gold: ${h.gold}`, x + w / 2 + 60, by + 13, { align: 'center', size: 11, color: '#e8c040' });
   }
@@ -328,8 +513,7 @@ export class Hud {
 
   // ---------- menus ----------
   drawMenu(ui: UI) {
-    const c = ui.c;
-    c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(0, 0, VIEW_W, VIEW_H); ui.block(0, 0, VIEW_W, VIEW_H);
+    ui.block(-1000, -1000, 4000, 4000);
     if (this.menu === 'main') {
       const items: [string, () => void][] = [
         ['Save Game', () => { this.hooks.save(); this.menu = 'none'; }], ['Options', () => { this.menu = 'options'; }],
@@ -349,8 +533,8 @@ export class Hud {
     }
   }
   drawDeath(ui: UI) {
-    const c = ui.c, g = this.g();
-    c.fillStyle = 'rgba(40,0,0,0.55)'; c.fillRect(0, 0, VIEW_W, VIEW_H); ui.block(0, 0, VIEW_W, VIEW_H);
+    const g = this.g();
+    ui.block(-1000, -1000, 4000, 4000);
     ui.text('You have died', VIEW_W / 2, 150, { align: 'center', size: 34, color: '#c02020', bold: true });
     ui.menuItem('Restart in town', 170, 230, 300, () => g.restartInTown(), { size: 20 });
     ui.menuItem('Load Game', 170, 275, 300, () => this.hooks.load(), { size: 20 });
@@ -365,6 +549,30 @@ function pickUpPack(h: Game['hero'], it: Item): boolean {
   }
   return false;
 }
+function usable(it: Item) { return (it.misc !== 'IMISC_NONE' && it.misc !== 'IMISC_STAFF' && it.misc !== 'IMISC_UNIQUE' && it.loc === 'ILOC_UNEQUIPABLE') || it.misc === 'IMISC_BOOK'; }
+function shortName(s: string) { const w = s.replace(/^(Scroll|Staff) /, '').split(' '); return (w.length > 1 ? w.map((x) => x[0]).join('') : w[0]).slice(0, 8); }
+/** Small vector icons for the HUD (no icon font needed). */
+export function drawGlyph(c: CanvasRenderingContext2D, k: string, x: number, y: number, s = 1) {
+  c.save(); c.translate(x, y); c.scale(s, s); c.lineWidth = 2; c.strokeStyle = '#e8d8a8'; c.fillStyle = '#e8d8a8';
+  const L = (pts: number[]) => { c.beginPath(); c.moveTo(pts[0], pts[1]); for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]); c.stroke(); };
+  switch (k) {
+    case 'inv': c.strokeRect(-9, -5, 18, 14); L([-5, -5, -5, -9, 5, -9, 5, -5]); break;
+    case 'char': c.beginPath(); c.arc(0, -6, 5, 0, Math.PI * 2); c.stroke(); L([-9, 11, -7, 2, 7, 2, 9, 11]); break;
+    case 'spell': c.strokeRect(-8, -9, 16, 18); L([-4, -9, -4, 9]); L([0, -3, 5, -3]); L([0, 2, 5, 2]); break;
+    case 'quest': c.strokeRect(-7, -10, 14, 20); c.font = 'bold 14px serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('!', 0, 1); break;
+    case 'menu': L([-9, -6, 9, -6]); L([-9, 0, 9, 0]); L([-9, 6, 9, 6]); break;
+    case 'sword': L([-9, 9, 8, -8]); L([-6, 2, 2, 10]); L([8, -8, 10, -10]); break;
+    case 'bow': c.beginPath(); c.arc(-6, 0, 12, -1.1, 1.1); c.stroke(); L([-1, -10, -1, 10]); L([-8, 0, 10, 0]); break;
+    case 'hammer': c.fillRect(-8, -9, 12, 7); L([-2, -2, -2, 10]); break;
+    case 'trap': L([-9, 6, -3, -4, 0, 4, 3, -4, 9, 6]); break;
+    case 'staff': L([-6, 10, 5, -7]); c.beginPath(); c.arc(6, -8, 3, 0, Math.PI * 2); c.fill(); break;
+    case 'pot_red': case 'pot_blue': c.fillStyle = k === 'pot_red' ? '#e03030' : '#3060ff'; c.beginPath(); c.arc(0, 3, 8, 0, Math.PI * 2); c.fill(); c.fillRect(-3, -9, 6, 7); c.fillStyle = '#c8b890'; c.fillRect(-4, -11, 8, 3); break;
+    case 'sp_fire': c.fillStyle = '#ff8a20'; c.beginPath(); c.moveTo(0, -10); c.quadraticCurveTo(9, 2, 0, 9); c.quadraticCurveTo(-9, 2, 0, -10); c.fill(); break;
+    case 'sp_lightning': c.strokeStyle = '#9cf'; L([3, -10, -4, 1, 3, 1, -3, 10]); break;
+    default: c.strokeStyle = '#c8a0ff'; c.beginPath(); c.arc(0, 0, 7, 0, Math.PI * 2); c.stroke(); L([-4, 0, 4, 0]); L([0, -4, 0, 4]); break;
+  }
+  c.restore();
+}
 function storeTitle(m: StoreMode) {
   return ({ buy: 'I have these items for sale', premium: 'I have these premium items for sale', sell: 'Which item is for sale?', repair: 'Repair which item?', identify: 'Identify which item? (100 gold)', recharge: 'Recharge which item?', wirt: 'I have this item for sale', menu: '', talk: '' } as Record<StoreMode, string>)[m];
 }
@@ -374,21 +582,6 @@ export function skillLabel(g: Game, id: string): string {
   if (id.startsWith('scroll:')) return `Scroll ${SPELLS[id.slice(7)]?.name ?? ''}`;
   if (id.startsWith('staff:')) return `Staff ${SPELLS[id.slice(6)]?.name ?? ''}`;
   return SPELLS[id]?.name ?? id;
-}
-function orb(c: CanvasRenderingContext2D, cx: number, cy: number, frac: number, col: string, artKey: string) {
-  const f0 = Math.max(0, Math.min(1, frac));
-  if (hasImg(artKey) && hasImg('ui/orb-empty')) {
-    drawImg(c, 'ui/orb-empty', cx - 56, cy - 56);
-    c.save(); c.beginPath(); c.rect(cx - 56, cy + 44 - 88 * f0, 112, 112); c.clip(); drawImg(c, artKey, cx - 56, cy - 56); c.restore();
-    return;
-  }
-  const r = 50;
-  c.fillStyle = '#0a0806'; c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.fill();
-  c.save(); c.beginPath(); c.arc(cx, cy, r - 3, 0, Math.PI * 2); c.clip();
-  c.fillStyle = col; const f = Math.max(0, Math.min(1, frac)); c.fillRect(cx - r, cy + r - 2 * r * f, 2 * r, 2 * r * f);
-  c.fillStyle = 'rgba(255,255,255,0.12)'; c.beginPath(); c.ellipse(cx - 14, cy - 18, 14, 9, -0.5, 0, Math.PI * 2); c.fill();
-  c.restore();
-  c.strokeStyle = '#8a7a52'; c.lineWidth = 3; c.beginPath(); c.arc(cx, cy, r, 0, Math.PI * 2); c.stroke();
 }
 /** Icon id in the CC0 item atlas; closest base when the exact item has no icon yet. */
 export function itemIconId(it: Item): string {

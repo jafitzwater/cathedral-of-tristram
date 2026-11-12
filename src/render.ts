@@ -1,5 +1,5 @@
 // Canvas 2D isometric world renderer. Placeholder shapes for anything the art pack has not delivered.
-import { PLAY_H, TILE_H, TILE_W, VIEW_W, tileToScreen, DIRS, pickTile, type P } from './iso';
+import { TILE_H, TILE_W, view, tileToScreen, DIRS, pickTile, type P } from './iso';
 import { T, TALL, at } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
 import { drawArt, drawFrame, hasFrame } from './art';
@@ -14,7 +14,7 @@ const LIGHT_R = 10;
 
 export function camera(g: Game) {
   const s = tileToScreen(g.p.x, g.p.y);
-  return { x: VIEW_W / 2 - s.x, y: PLAY_H / 2 - s.y - TILE_H / 2 + 20 };
+  return { x: view.w / 2 - s.x, y: view.h / 2 - s.y - TILE_H / 2 + 20 };
 }
 function diamond(c: CanvasRenderingContext2D, x: number, y: number) {
   c.beginPath(); c.moveTo(x, y); c.lineTo(x + TILE_W / 2, y + TILE_H / 2); c.lineTo(x, y + TILE_H); c.lineTo(x - TILE_W / 2, y + TILE_H / 2); c.closePath();
@@ -34,8 +34,8 @@ export let lastSprites: Sprite[] = [];
 export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   const lv = g.level, m = lv.map, cam = camera(g);
   const town = lv.id === 'town';
-  c.fillStyle = '#000'; c.fillRect(0, 0, VIEW_W, PLAY_H);
-  c.save(); c.beginPath(); c.rect(0, 0, VIEW_W, PLAY_H); c.clip();
+  c.fillStyle = '#000'; c.fillRect(0, 0, view.w, view.h);
+  c.save(); c.beginPath(); c.rect(0, 0, view.w, view.h); c.clip();
   const sprites: Sprite[] = [];
   // gather entities by diagonal
   type Ent = { s: number; draw: () => void };
@@ -58,7 +58,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
     for (let x = Math.max(0, s - m.h + 1); x <= Math.min(s, m.w - 1); x++) {
       const y = s - x, t = at(m, x, y);
       const p = tileToScreen(x, y), sx = p.x + cam.x, sy = p.y + cam.y;
-      if (sx < -TILE_W || sx > VIEW_W + TILE_W || sy < -TILE_H * 3 || sy > PLAY_H + TILE_H * 2) continue;
+      if (sx < -TILE_W || sx > view.w + TILE_W || sy < -TILE_H * 3 || sy > view.h + TILE_H * 2) continue;
       if (!town && !lv.explored[y * m.w + x]) continue;
       const lit = lightAt(x, y), seen = town ? 1 : Math.max(0.18, lit);
       c.globalAlpha = 1;
@@ -99,13 +99,13 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   for (const f of g.floats) { const p = tileToScreen(f.x, f.y); c.globalAlpha = Math.min(1, f.t * 2); c.fillStyle = f.color; c.fillText(f.text, p.x + cam.x, p.y + cam.y - 50 - (1 - f.t) * 20); }
   c.globalAlpha = 1;
   // target info (D1 shows the hovered monster's name + life bar)
-  const t = g.target;
+  const lm = g.lockedMon(), t = lm ? { kind: 'mon' as const, m: lm } : g.target;
   if (t?.kind === 'mon' && t.m.alive) {
-    c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(VIEW_W / 2 - 90, 4, 180, 30);
-    c.fillStyle = t.m.def.unique ? '#d8b040' : '#ddd'; c.font = '12px serif'; c.fillText(t.m.def.name, VIEW_W / 2, 17);
-    c.fillStyle = '#400'; c.fillRect(VIEW_W / 2 - 80, 22, 160, 6); c.fillStyle = '#c00'; c.fillRect(VIEW_W / 2 - 80, 22, 160 * Math.max(0, t.m.hp / t.m.maxHp), 6);
+    c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(view.w / 2 - 90, 36, 180, 30);
+    c.fillStyle = t.m.def.unique ? '#d8b040' : '#ddd'; c.font = '12px serif'; c.fillText(t.m.def.name, view.w / 2, 49);
+    c.fillStyle = '#400'; c.fillRect(view.w / 2 - 80, 54, 160, 6); c.fillStyle = '#c00'; c.fillRect(view.w / 2 - 80, 54, 160 * Math.max(0, t.m.hp / t.m.maxHp), 6);
   }
-  if (g.speech) { c.fillStyle = '#ff6040'; c.font = 'bold 16px serif'; c.fillText(g.speech.text, VIEW_W / 2, 60); }
+  if (g.speech) { c.fillStyle = '#ff6040'; c.font = 'bold 16px serif'; c.fillText(g.speech.text, view.w / 2, 86); }
   c.restore();
   lastSprites = sprites;
 }
@@ -150,6 +150,10 @@ function drawMon(c: CanvasRenderingContext2D, g: Game, mo: Game['level']['monste
   const p = tileToScreen(mo.x, mo.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
   const [col, sc] = MON_COLOR[mo.def.id] ?? ['#888', 1];
   if (!mo.alive) { c.globalAlpha = Math.max(0.3, lit); c.fillStyle = '#3a1a10'; c.beginPath(); c.ellipse(x, y, 14 * sc, 6 * sc, 0, 0, Math.PI * 2); c.fill(); c.globalAlpha = 1; return; }
+  if (g.lockId === mo.uid) { // Immortal soft-lock ring
+    c.strokeStyle = 'rgba(255,60,30,0.9)'; c.lineWidth = 2; c.beginPath(); c.ellipse(x, y, 20 * sc, 10 * sc, 0, 0, Math.PI * 2); c.stroke();
+    c.strokeStyle = 'rgba(255,160,60,0.5)'; c.lineWidth = 1; c.beginPath(); c.ellipse(x, y, 24 * sc, 12 * sc, 0, 0, Math.PI * 2); c.stroke();
+  }
   c.globalAlpha = Math.max(0.35, lit);
   if (!drawArt(c, `mon_${mo.def.id}_${mo.state}`, x, y, mo.dir)) {
     figure(c, x, y, mo.flash > 0 ? '#fff' : col, sc, g.target?.kind === 'mon' && g.target.m === mo ? '#f00' : '#000');
