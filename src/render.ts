@@ -4,7 +4,8 @@ import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './i
 import type { NpcDef } from './levels/town';
 import { T, TALL, at } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
-import { art, drawActor, drawFrame, hasFrame, MON_ART } from './art';
+import { art, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
+import { wallData, wallFade } from './walls';
 import { itemIconId } from './hud';
 import type { Actor, Game, Target } from './game';
 
@@ -52,6 +53,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   if (!g.dead || true) ents.push({ s: pd, draw: () => drawPlayer(c, g, g.p, cam, time) });
   ents.sort((a, b) => a.s - b.s);
   let ei = 0;
+  const wd = !town && hasFrame('stoneWall_n') ? wallData(m) : null;
   for (let s = 0; s < m.w + m.h - 1; s++) {
     for (let x = Math.max(0, s - m.h + 1); x <= Math.min(s, m.w - 1); x++) {
       const y = s - x, t = at(m, x, y);
@@ -60,6 +62,22 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
       if (!town && !lv.explored[y * m.w + x]) continue;
       const lit = lightAt(x, y), seen = town ? 1 : Math.max(0.18, lit);
       c.globalAlpha = 1;
+      // Order 6: Cathedral walls, doors, pillars and arches from the CC0 Kenney pieces (wall-facing pass in walls.ts)
+      if (wd) {
+        const wt = wd[y * m.w + x], a = wallFade(x, y, g.p.x, g.p.y) * seen;
+        if (t === T.WALL) {
+          if (wt) { c.globalAlpha = a; for (const pc of wt.pieces) drawCell(c, pc.id, sx + (pc.dx ?? 0), sy + (pc.dy ?? 0)); c.globalAlpha = 1; }
+          continue;
+        }
+        if (t === T.DOOR || t === T.DOOR_OPEN || t === T.PILLAR) {
+          floorArt(c, false, t === T.PILLAR ? T.FLOOR : T.DOOR_OPEN, x, y, sx, sy, seen);
+          c.globalAlpha = a;
+          drawCell(c, t === T.PILLAR ? 'stoneColumn_n' : `stoneWallDoor${t === T.DOOR ? 'Closed' : 'Open'}_${wt?.door ?? 'n'}`, sx, sy);
+          c.globalAlpha = 1;
+          if (t === T.DOOR) sprites.push({ t: { kind: 'door', x, y }, x: sx - 20, y: sy - 40, w: 40, h: 72, depth: x + y - 0.5 });
+          continue;
+        }
+      }
       if (t === T.TREE && hasFrame('bigtree01')) {
         floorArt(c, town, T.GRASS, x, y, sx, sy, seen);
         drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6);
@@ -80,6 +98,8 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
         if (!town && (t === T.UP || t === T.DOWN)) drawFrame(c, t === T.UP ? 'stairs_s' : 'stairsAged_s', sx, sy + TILE_H - 2);
         if (t === T.UP || t === T.DOWN) { c.fillStyle = `rgba(255,230,160,${0.6 * seen})`; c.font = '10px serif'; c.textAlign = 'center'; c.fillText(t === T.UP ? 'UP' : 'DOWN', sx, sy + 20); }
         if (t === T.WATER) { c.fillStyle = 'rgba(120,160,255,0.15)'; c.fillRect(sx - 6 + Math.sin(time + x) * 6, sy + 14, 12, 2); }
+        const arch = wd?.[y * m.w + x]?.arch;
+        if (arch) { c.globalAlpha = wallFade(x, y, g.p.x, g.p.y) * seen; drawCell(c, `stoneWallArchway_${arch}`, sx, sy); c.globalAlpha = 1; }
       }
       if (t === T.DOOR) sprites.push({ t: { kind: 'door', x, y }, x: sx - 20, y: sy - 40, w: 40, h: 72, depth: x + y - 0.5 });
     }
