@@ -1,0 +1,32 @@
+// Tristram NPC dialog. D1's spoken text is Blizzard's copyrighted script, so these are original lines written in its spirit
+// (deviation, logged). Only the Butcher's short "Ah, fresh meat!" is quoted. Menus follow D1's store menus.
+export interface NpcText { greet: string; gossip: string[]; butcher: string; menu: string[] }
+export const NPC_TEXT: Record<string, NpcText> = {
+  griswold: { greet: 'Welcome to my smithy. What can I do for you?', menu: ['Talk to Griswold', 'Buy basic items', 'Buy premium items', 'Sell items', 'Repair items', 'Leave the shop'],
+    butcher: 'Folk who went down past the first halls never came back. Something with a blade bigger than any I\'ve forged waits in the dark.',
+    gossip: ['A good blade will save your life more often than a prayer. Keep yours sharp and come back when it dulls.', 'I lost my leg to the things below. I can still swing a hammer, though.', 'Wirt? The boy has a knack for finding goods he should not have. Mind your purse around him.'] },
+  pepin: { greet: 'Come in, sit. Let me look at those wounds.', menu: ['Talk to Pepin', 'Receive healing', 'Buy items', 'Leave the healer\'s home'],
+    butcher: 'The wounded man by the cathedral spoke of a butcher. I fear that poor soul is beyond my help.',
+    gossip: ['I can mend flesh, but I cannot mend what the darkness does to a mind.', 'Adria knows things about herbs that I do not. And some things I hope never to know.', 'Rest when you can. Healing is free here, it always will be.'] },
+  adria: { greet: 'I sensed you would come. What do you seek?', menu: ['Talk to Adria', 'Buy items', 'Sell items', 'Recharge staves', 'Leave the shack'],
+    butcher: 'A hungry spirit walks the upper halls, wearing a body that was made for slaughter. Do not let it corner you.',
+    gossip: ['Magic is a tool, like any other. It cuts both ways.', 'The cathedral was holy ground once. What lies beneath it now is anything but.', 'Books of power are rare. When you find one, read it.'] },
+  cain: { greet: 'Stay a while and listen... or tell me what you need.', menu: ['Talk to Deckard Cain', 'Identify an item', 'Say goodbye'],
+    butcher: 'The beast the townsman spoke of is a demon that delights in carving flesh. Strike it from range if you can, and never stand still.',
+    gossip: ['Tristram was a quiet place before the king fell into madness. The cathedral\'s halls remember everything.', 'Bring me any enchanted item and I will tell you what power sleeps in it.', 'Old stories tell of three great evils bound in stone. I fear one stirs beneath our feet.'] },
+  ogden: { greet: 'Welcome to the Rising Sun. Not many travellers these days.', menu: ['Talk to Ogden', 'Leave the tavern'],
+    butcher: 'Strange screams carry up from the cathedral at night. My Garda will not let me near the place.',
+    gossip: ['Things were better before the soldiers marched off. Half of them never came back.', 'Gillian works hard. She looks after her grandmother, you know.', 'If you come back alive, the first drink is on the house.'] },
+  gillian: { greet: 'Oh! Can I help you?', menu: ['Talk to Gillian', 'Say goodbye'],
+    butcher: 'Please be careful down there. Too many have gone into that place.',
+    gossip: ['My grandmother has terrible dreams. She wakes up screaming about fire.', 'Farnham was a brave man, once. Now he drinks to forget.', 'Pepin is kind. He never asks for coin.'] },
+  farnham: { greet: 'Wha...? Oh. You. Got any coin for a drink?', menu: ['Talk to Farnham', 'Say goodbye'],
+    butcher: 'Big... with a cleaver. I saw it. Nobody believes me.',
+    gossip: ['I went down there with the others. I came back. They didn\'t.', 'Don\'t trust the shiny things in the dark. They bite.', 'Lachdanan... no. Never mind.'] },
+  wirt: { greet: 'Pssst. Over here.', menu: ['Talk to Wirt', 'What have you got?', 'Say goodbye'],
+    butcher: 'I hear something big carved up a bunch of folk near the stairs. Bad for business.',
+    gossip: ['Griswold makes good stuff, but I get the really good stuff. For a price.', 'The demons took my leg. I took my revenge in profits.', 'Looking costs fifty gold. Fair\'s fair.'] },
+  wounded: { greet: 'Please... listen...', menu: ['Talk to the wounded townsman', 'Leave'],
+    butcher: 'It came out of the dark... a huge thing with a cleaver. It cut down the others like meat on a block. Stop it... before it comes for the rest of us...',
+    gossip: [] },
+};
