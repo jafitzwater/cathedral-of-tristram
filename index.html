@@ -2,21 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <link rel="icon" href="data:," />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#000000" />
+  <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="%BASE_URL%icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="%BASE_URL%icons/icon-180.png" />
   <title>Cathedral of Tristram</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
-    body { display: flex; align-items: center; justify-content: center; }
-    canvas { image-rendering: pixelated; display: block; }
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; position: fixed; inset: 0;
+      touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+    canvas { display: block; position: fixed; left: 0; top: 0; touch-action: none; -webkit-touch-callout: none; }
+    #safe { position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
     #rotate { display: none; position: fixed; inset: 0; background: #000; color: #d8c89a; font: 20px serif; align-items: center; justify-content: center; text-align: center; padding: 24px; }
     @media (orientation: portrait) { #rotate { display: flex; } #view { display: none; } }
   </style>
 </head>
 <body>
   <canvas id="view"></canvas>
+  <div id="safe"></div>
   <input id="name" maxlength="15" autocomplete="off" autocapitalize="words" style="position:fixed;left:-1000px;top:0;opacity:0" />
   <div id="rotate">Rotate your device to landscape to play.</div>
   <script type="module" src="/src/main.ts"></script>
