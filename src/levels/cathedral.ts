@@ -1,18 +1,22 @@
-// Cathedral level 1 generator. D1-style (drlg_l1.cpp inspired, not a port): rectangular rooms chained by 2-wide corridors,
-// doors where corridors enter rooms, pillar rows in big rooms, stairs up in the first room, stairs down in the farthest room,
-// and the Butcher's 9x9 chamber with a single door (D1: Butcher set piece on dlvl 2 - placed on L1 here, logged deviation).
-// Map is 56x56 tiles vs D1's 80x80 playable area (mobile budget; object counts scaled by area).
+// Cathedral level 1 generator. D1-style (drlg_l1.cpp inspired, not a port): rectangular rooms chained by corridors, doors where
+// corridors enter rooms, pillar rows in big rooms, stairs up in the first room, stairs down in the farthest room, and the
+// Butcher's chamber with a single door (D1: Butcher set piece on dlvl 2 - placed on L1 here, logged deviation).
+// Order 9: like D1 v1.09 the layout is made on a 40x40 DUNGEON CELL grid and every cell becomes 2x2 game tiles (D1's
+// dungeon[40][40] -> dPiece 80x80 playable), so rooms, corridors and the Butcher's room are D1-sized in tiles. Doors, stairs
+// and pillars are single tiles inside their cell; objects and monsters are placed on the tile map.
 import { Rng } from '../rng';
 import { L1_POOL } from '../data/monsters';
 import { T, at, setT, type LevelMap, type Obj, type Room } from './types';
 
-export const L1_W = 56, L1_H = 56;
+export const CELLS = 40, SUB = 2;
+export const L1_W = CELLS * SUB, L1_H = CELLS * SUB;
 const SHRINES = ['Mysterious', 'Hidden', 'Gloomy', 'Weird', 'Magical', 'Stone', 'Religious', 'Enchanted', 'Thaumaturgic', 'Fascinating',
   'Cryptic', 'Eldritch', 'Eerie', 'Divine', 'Holy', 'Sacred', 'Spiritual', 'Abandoned', 'Creepy', 'Quiet', 'Secluded', 'Ornate', 'Glimmering'];
 // (Spooky and Tainted are multiplayer-only, so excluded in SP: objects.cpp shrineavail.)
 
 const overlaps = (a: Room, b: Room, pad: number) => a.x - pad < b.x + b.w && b.x - pad < a.x + a.w && a.y - pad < b.y + b.h && b.y - pad < a.y + a.h;
 const centre = (r: Room) => ({ x: r.x + (r.w >> 1), y: r.y + (r.h >> 1) });
+const scaleRoom = (r: Room): Room => ({ x: r.x * SUB, y: r.y * SUB, w: r.w * SUB, h: r.h * SUB });
 
 export function generateL1(seed: number): LevelMap {
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -22,22 +26,30 @@ export function generateL1(seed: number): LevelMap {
   throw new Error('L1 generation failed');
 }
 
+/** Cell-grid door: the cell, and which side of it touches the room (the door tile sits in that row/column). */
+interface CellDoor { x: number; y: number; dx: number; dy: number }
+
 function tryGen(rng: Rng): LevelMap | null {
-  const m: LevelMap = { w: L1_W, h: L1_H, tiles: new Uint8Array(L1_W * L1_H).fill(T.WALL), up: null, down: null, start: { x: 0, y: 0 }, rooms: [], butcherRoom: null, objects: [], monsterSpots: [] };
+  const G = CELLS;
+  const c: Uint8Array = new Uint8Array(G * G).fill(T.WALL); // cell grid
+  const cat = (x: number, y: number) => c[y * G + x], cset = (x: number, y: number, t: number) => { if (x >= 0 && y >= 0 && x < G && y < G) c[y * G + x] = t; };
   const rooms: Room[] = [];
-  // Butcher's chamber first, in a corner region.
-  const bx = rng.int(2) ? 3 : L1_W - 13, by = rng.int(2) ? 3 : L1_H - 13;
-  const butcher: Room = { x: bx, y: by, w: 9, h: 9 };
-  for (let i = 0; i < 400 && rooms.length < 14; i++) {
-    const w = 4 + rng.int(7), h = 4 + rng.int(7);
-    const r: Room = { x: 2 + rng.int(L1_W - w - 4), y: 2 + rng.int(L1_H - h - 4), w, h };
-    if (overlaps(r, butcher, 3) || rooms.some((o) => overlaps(r, o, 3))) continue;
+  // Butcher's chamber first, in a corner region (5x5 cells = 10x10 tiles inside).
+  const BS = 5;
+  const bx = rng.int(2) ? 2 : G - BS - 2, by = rng.int(2) ? 2 : G - BS - 2;
+  const butcher: Room = { x: bx, y: by, w: BS, h: BS };
+  // D1 L1: a few big chambers plus side rooms (sizes in cells; x2 in tiles)
+  for (let i = 0; i < 600 && rooms.length < 12; i++) {
+    const big = rooms.length < 2;
+    const w = big ? 6 + rng.int(3) : 2 + rng.int(5), h = big ? 6 + rng.int(3) : 2 + rng.int(5);
+    const r: Room = { x: 1 + rng.int(G - w - 2), y: 1 + rng.int(G - h - 2), w, h };
+    if (overlaps(r, butcher, 2) || rooms.some((o) => overlaps(r, o, 2))) continue;
     rooms.push(r);
   }
-  if (rooms.length < 8) return null;
-  const carve = (r: Room) => { for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) setT(m, x, y, T.FLOOR); };
+  if (rooms.length < 7) return null;
+  const carve = (r: Room) => { for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) cset(x, y, T.FLOOR); };
   rooms.forEach(carve); carve(butcher);
-  // Connect rooms: minimum spanning tree on centres plus a couple of loops (L-shaped 2-wide corridors).
+  // Connect rooms: minimum spanning tree on centres plus a couple of loops (L-shaped 1-cell = 2-tile corridors).
   const all = [...rooms];
   const conn: [number, number][] = [];
   const inTree = new Set([0]);
@@ -50,8 +62,9 @@ function tryGen(rng: Rng): LevelMap | null {
     conn.push(best!); inTree.add(best![1]);
   }
   for (let i = 0; i < 2; i++) conn.push([rng.int(all.length), rng.int(all.length)]);
-  const corridorCells = new Set<number>();
-  const dig = (x: number, y: number) => { for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) { const xx = x + dx, yy = y + dy; if (xx > 0 && yy > 0 && xx < L1_W - 1 && yy < L1_H - 1 && at(m, xx, yy) === T.WALL) { setT(m, xx, yy, T.FLOOR); corridorCells.add(yy * L1_W + xx); } } };
+  const corridor = new Set<number>();
+  const dig = (x: number, y: number) => { if (x > 0 && y > 0 && x < G - 1 && y < G - 1 && cat(x, y) === T.WALL) { cset(x, y, T.FLOOR); corridor.add(y * G + x); } };
+  const inBR = (x: number, y: number) => x >= butcher.x - 1 && x <= butcher.x + butcher.w && y >= butcher.y - 1 && y <= butcher.y + butcher.h;
   for (const [a, b] of conn) {
     if (a === b) continue;
     const ca = centre(all[a]), cb = centre(all[b]);
@@ -67,50 +80,64 @@ function tryGen(rng: Rng): LevelMap | null {
   const near = rooms.reduce((p, r) => (Math.abs(centre(r).x - bc.x) + Math.abs(centre(r).y - bc.y) < Math.abs(centre(p).x - bc.x) + Math.abs(centre(p).y - bc.y) ? r : p));
   const nc = centre(near);
   const horizDoor = Math.abs(nc.x - bc.x) > Math.abs(nc.y - bc.y);
-  const door = horizDoor ? { x: nc.x > bc.x ? butcher.x + butcher.w : butcher.x - 1, y: bc.y } : { x: bc.x, y: nc.y > bc.y ? butcher.y + butcher.h : butcher.y - 1 };
+  const bdoor: CellDoor = horizDoor
+    ? { x: nc.x > bc.x ? butcher.x + butcher.w : butcher.x - 1, y: bc.y, dx: nc.x > bc.x ? -1 : 1, dy: 0 }
+    : { x: bc.x, y: nc.y > bc.y ? butcher.y + butcher.h : butcher.y - 1, dx: 0, dy: nc.y > bc.y ? -1 : 1 };
   {
-    let x = door.x + (horizDoor ? Math.sign(nc.x - bc.x) : 0), y = door.y + (horizDoor ? 0 : Math.sign(nc.y - bc.y));
-    const one = (xx: number, yy: number) => { if (at(m, xx, yy) === T.WALL && !(xx >= butcher.x - 1 && xx <= butcher.x + butcher.w && yy >= butcher.y - 1 && yy <= butcher.y + butcher.h)) setT(m, xx, yy, T.FLOOR); };
+    let x = bdoor.x + (horizDoor ? Math.sign(nc.x - bc.x) : 0), y = bdoor.y + (horizDoor ? 0 : Math.sign(nc.y - bc.y));
+    const one = (xx: number, yy: number) => { if (cat(xx, yy) === T.WALL && !inBR(xx, yy)) cset(xx, yy, T.FLOOR); };
     if (horizDoor) { while (x !== nc.x) { one(x, y); x += Math.sign(nc.x - x); } while (y !== nc.y) { one(x, y); y += Math.sign(nc.y - y); } }
     else { while (y !== nc.y) { one(x, y); y += Math.sign(nc.y - y); } while (x !== nc.x) { one(x, y); x += Math.sign(nc.x - x); } }
   }
-  // Re-seal the butcher room walls (corridors may have clipped them) then add its door.
+  // Re-seal the butcher room walls (corridors may have clipped them); its door cell is opened below.
   for (let y = butcher.y - 1; y <= butcher.y + butcher.h; y++) for (let x = butcher.x - 1; x <= butcher.x + butcher.w; x++) {
     const edge = x === butcher.x - 1 || y === butcher.y - 1 || x === butcher.x + butcher.w || y === butcher.y + butcher.h;
-    setT(m, x, y, edge ? T.WALL : T.FLOOR);
+    cset(x, y, edge ? T.WALL : T.FLOOR);
   }
-  setT(m, door.x, door.y, T.DOOR);
-  // Doors where a 2-wide corridor meets a room edge (D1 L1 doors/arches): put a door on a corridor cell adjacent to a room, sometimes.
+  cset(bdoor.x, bdoor.y, T.FLOOR);
+  // Doors where a corridor meets a room edge (D1 L1 doors/arches): sometimes, on a corridor cell next to the room.
+  const doors: CellDoor[] = [bdoor];
   for (const r of rooms) {
-    const sides: { x: number; y: number }[] = [];
-    for (let x = r.x; x < r.x + r.w; x++) { sides.push({ x, y: r.y - 1 }, { x, y: r.y + r.h }); }
-    for (let y = r.y; y < r.y + r.h; y++) { sides.push({ x: r.x - 1, y }, { x: r.x + r.w, y }); }
+    const sides: CellDoor[] = [];
+    for (let x = r.x; x < r.x + r.w; x++) { sides.push({ x, y: r.y - 1, dx: 0, dy: 1 }, { x, y: r.y + r.h, dx: 0, dy: -1 }); }
+    for (let y = r.y; y < r.y + r.h; y++) { sides.push({ x: r.x - 1, y, dx: 1, dy: 0 }, { x: r.x + r.w, y, dx: -1, dy: 0 }); }
     for (const s of sides) {
-      if (!corridorCells.has(s.y * L1_W + s.x) || rng.int(3) !== 0) continue;
-      // a door needs walls on both sides along the room edge
-      const horiz = s.y === r.y - 1 || s.y === r.y + r.h;
-      const a = horiz ? at(m, s.x - 1, s.y) : at(m, s.x, s.y - 1), b = horiz ? at(m, s.x + 1, s.y) : at(m, s.x, s.y + 1);
-      if (a === T.WALL && b === T.WALL) setT(m, s.x, s.y, T.DOOR);
+      if (!corridor.has(s.y * G + s.x) || rng.int(3) !== 0 || doors.some((d) => d.x === s.x && d.y === s.y)) continue;
+      // a door needs walls on both sides along the room edge, and room floor on its inner side
+      const along = s.dy !== 0;
+      const a = along ? cat(s.x - 1, s.y) : cat(s.x, s.y - 1), b = along ? cat(s.x + 1, s.y) : cat(s.x, s.y + 1);
+      if (a === T.WALL && b === T.WALL && cat(s.x + s.dx, s.y + s.dy) === T.FLOOR && cat(s.x - s.dx, s.y - s.dy) === T.FLOOR) doors.push(s);
     }
   }
-  // Pillars in big rooms (D1 cathedral columns).
-  for (const r of rooms) if (r.w >= 8 && r.h >= 8) for (let y = r.y + 2; y < r.y + r.h - 2; y += 3) for (const x of [r.x + 2, r.x + r.w - 3]) setT(m, x, y, T.PILLAR);
-  // Stairs: up in room 0 (arrival from town), down in the farthest room (locked: only L1 in scope).
-  const start = rooms[0];
+  // ---- expand cells to 2x2 tiles ----
+  const m: LevelMap = { w: L1_W, h: L1_H, tiles: new Uint8Array(L1_W * L1_H), up: null, down: null, start: { x: 0, y: 0 }, rooms: [], butcherRoom: null, objects: [], monsterSpots: [] };
+  for (let y = 0; y < L1_H; y++) for (let x = 0; x < L1_W; x++) m.tiles[y * L1_W + x] = cat(x >> 1, y >> 1);
+  // a door cell keeps the corridor's 2 tiles open on its outer half and narrows to one door tile + one wall tile on the half
+  // touching the room, so the door stands in its wall line like D1's (walls on both sides)
+  for (const d of doors) {
+    const X = d.x * SUB, Y = d.y * SUB;
+    if (d.dy !== 0) { const ty = d.dy > 0 ? Y + 1 : Y; setT(m, X, ty, T.DOOR); setT(m, X + 1, ty, T.WALL); }
+    else { const tx = d.dx > 0 ? X + 1 : X; setT(m, tx, Y, T.DOOR); setT(m, tx, Y + 1, T.WALL); }
+  }
+  const trooms = rooms.map(scaleRoom), tb = scaleRoom(butcher);
+  // Pillars in big rooms (D1 cathedral columns): a single tile per pillar cell.
+  for (const r of trooms) if (r.w >= 12 && r.h >= 12) for (let y = r.y + 3; y < r.y + r.h - 3; y += 4) for (const x of [r.x + 3, r.x + r.w - 4]) setT(m, x, y, T.PILLAR);
+  // Stairs: up on room 0's top edge (arrival from town), down in the farthest room (locked: only L1 in scope).
+  const start = trooms[0];
   const sc = centre(start);
   m.up = { x: sc.x, y: start.y }; setT(m, m.up.x, m.up.y, T.UP);
-  m.start = { x: sc.x, y: start.y + 1 };
+  m.start = { x: sc.x, y: start.y + 2 };
   const dist = bfs(m, m.start);
-  let far = rooms[1], fd = -1;
-  for (const r of rooms.slice(1)) { const d = dist[centre(r).y * L1_W + centre(r).x]; if (d > fd) { fd = d; far = r; } }
+  let far = trooms[1], fd = -1;
+  for (const r of trooms.slice(1)) { const d = dist[centre(r).y * L1_W + centre(r).x]; if (d > fd) { fd = d; far = r; } }
   if (fd < 0) return null;
   m.down = centre(far); setT(m, m.down.x, m.down.y, T.DOWN);
   // Connectivity check: every floor tile reachable (doors count as passable).
   const d2 = bfs(m, m.start);
   for (let i = 0; i < m.tiles.length; i++) if ((m.tiles[i] === T.FLOOR || m.tiles[i] === T.DOOR) && d2[i] < 0) return null;
-  m.rooms = rooms; m.butcherRoom = butcher;
-  placeObjects(m, rng, start, butcher);
-  placeMonsters(m, rng, start, butcher);
+  m.rooms = trooms; m.butcherRoom = tb;
+  placeObjects(m, rng, start, tb);
+  placeMonsters(m, rng, start, tb);
   return m;
 }
 
@@ -144,13 +171,13 @@ function placeObjects(m: LevelMap, rng: Rng, start: Room, butcher: Room) {
   let id = 1;
   const avoid = (x: number, y: number) => inRoom(butcher, x, y, 1) || inRoom(start, x, y, 0);
   const add = (kind: Obj['kind'], p: { x: number; y: number } | null, v1 = 0, v2 = 0, shrine?: string) => { if (p) m.objects.push({ id: id++, kind, x: p.x, y: p.y, used: false, var1: v1, var2: v2, shrine, seed: rng.int(1 << 30) }); };
-  // Counts scaled from InitObjects by ~0.5 area: sarc 10-15 -> 5-7, chest1 5-10 -> 2-5, chest2 3-6 -> 1-3, chest3 1-5 -> 1-2, barrel groups 3-7 -> 2-4.
+  // Order 9: the map is D1's 80x80 tiles now, so InitObjects' counts apply as-is: sarc 10-15, chest1 5-10, chest2 3-6, chest3 1-5, barrel groups 3-7.
   const n = (a: number, b: number) => a + rng.int(b - a + 1);
-  for (let i = n(5, 7); i > 0; i--) add('sarc', freeSpot(m, rng, avoid, 1), rng.int(10));
-  for (let i = n(2, 5); i > 0; i--) add('chest1', freeSpot(m, rng, avoid), rng.int(2), rng.int(8));
-  for (let i = n(1, 3); i > 0; i--) add('chest2', freeSpot(m, rng, avoid), rng.int(3), rng.int(8));
-  for (let i = n(1, 2); i > 0; i--) add('chest3', freeSpot(m, rng, avoid), rng.int(4), rng.int(8));
-  for (let g = n(2, 4); g > 0; g--) {
+  for (let i = n(10, 15); i > 0; i--) add('sarc', freeSpot(m, rng, avoid, 1), rng.int(10));
+  for (let i = n(5, 10); i > 0; i--) add('chest1', freeSpot(m, rng, avoid), rng.int(2), rng.int(8));
+  for (let i = n(3, 6); i > 0; i--) add('chest2', freeSpot(m, rng, avoid), rng.int(3), rng.int(8));
+  for (let i = n(1, 5); i > 0; i--) add('chest3', freeSpot(m, rng, avoid), rng.int(4), rng.int(8));
+  for (let g = n(3, 7); g > 0; g--) {
     let p = freeSpot(m, rng, avoid, 0);
     if (!p) continue;
     add(rng.int(4) ? 'barrel' : 'barrel_ex', p, 0, rng.int(10));
@@ -166,7 +193,7 @@ function placeObjects(m: LevelMap, rng: Rng, start: Room, butcher: Room) {
   // Shrines: D1 places them via theme rooms; 1-2 here [TEMP].
   for (let i = n(1, 2); i > 0; i--) add('shrine', freeSpot(m, rng, avoid, 1), 0, 0, SHRINES[rng.int(SHRINES.length)]);
   // Butcher's chamber decor: impaled bodies along the walls (AddTortures).
-  for (const [dx, dy] of [[1, 1], [7, 1], [1, 7], [7, 7], [4, 1], [1, 4]]) add('body', { x: butcher.x + dx, y: butcher.y + dy });
+  for (const [dx, dy] of [[1, 1], [8, 1], [1, 8], [8, 8], [4, 1], [1, 4]]) add('body', { x: butcher.x + dx, y: butcher.y + dy });
 }
 
 function placeMonsters(m: LevelMap, rng: Rng, start: Room, butcher: Room) {
@@ -188,5 +215,5 @@ function placeMonsters(m: LevelMap, rng: Rng, start: Room, butcher: Room) {
       taken.add(q.y * m.w + q.x); m.monsterSpots.push({ id, x: q.x, y: q.y }); n--;
     }
   }
-  m.monsterSpots.push({ id: 'butcher', x: butcher.x + 4, y: butcher.y + 4 });
+  m.monsterSpots.push({ id: 'butcher', x: butcher.x + (butcher.w >> 1), y: butcher.y + (butcher.h >> 1) });
 }

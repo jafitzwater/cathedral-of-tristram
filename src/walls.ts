@@ -95,10 +95,35 @@ export function wallData(m: LevelMap): (WallTile | null)[] {
 
 export const FADE_ALPHA = 0.3;
 /**
- * D1 wall transparency: a wall piece on a tile in front of the hero (one to four diagonals nearer the viewer) and within three
- * tiles of him across the screen fades so he is never hidden. Returns the alpha for that tile's pieces.
+ * Order 9: D1 L1 walls stand about twice the hero's height. The Kenney pieces are ~40 px courses, so each wall, corner, column
+ * and pillar is drawn as WALL_COURSES stacked courses WALL_STEP px apart at draw time (no bigger atlas): ~168 px next to the
+ * 96 px hero. The lowest course stays on the tile edge; a door or arch is the lowest course with plain wall above it.
  */
-export function wallFade(wx: number, wy: number, hx: number, hy: number): number {
+export const WALL_COURSES = 4, WALL_STEP = 40, WALL_CAP = 8;
+export const WALL_PX = WALL_COURSES * WALL_STEP + WALL_CAP;
+export function stackPieces(bottom: string, upper: string = bottom): { id: string; dy: number }[] {
+  return Array.from({ length: WALL_COURSES }, (_, i) => ({ id: i === 0 ? bottom : upper, dy: i === 0 ? 0 : -i * WALL_STEP }));
+}
+/** The plain wall course above a door/arch of facing f. */
+export const plainAbove = (f: 'n' | 'w') => `stoneWall_${f}`;
+/** Fade reach in diagonals for a wall of WALL_PX (a diagonal is TILE_H/2 = 16 px nearer the viewer). */
+export const FADE_DIAG = Math.ceil(WALL_PX / 16), FADE_ACROSS = 4;
+export interface FadeRoom { x: number; y: number; w: number; h: number }
+/**
+ * D1 wall transparency, widened for the tall walls: a wall in front of the hero (1..FADE_DIAG diagonals nearer the viewer)
+ * and within FADE_ACROSS tiles across fades. Inside a room (D1's TransList), the whole front wall run of that room fades too,
+ * so the room's floor is never hidden behind its own near walls. Returns the alpha for that tile's pieces.
+ */
+export function wallFade(wx: number, wy: number, hx: number, hy: number, room?: FadeRoom | null): number {
   const ds = wx + wy - (hx + hy), across = Math.abs((wx - wy) - (hx - hy));
-  return ds > 0 && ds <= 4 && across <= 3 ? FADE_ALPHA : 1;
+  if (ds > 0 && ds <= FADE_DIAG && across <= FADE_ACROSS) return FADE_ALPHA;
+  if (room && ds > 0 && wx >= room.x - 2 && wy >= room.y - 2 && wx <= room.x + room.w + 1 && wy <= room.y + room.h + 1
+    && (wx >= room.x + room.w || wy >= room.y + room.h)) return FADE_ALPHA;
+  return 1;
+}
+/** The room (tile rect) the hero stands in, if any. */
+export function roomAt(m: LevelMap, x: number, y: number): FadeRoom | null {
+  const tx = Math.round(x), ty = Math.round(y);
+  for (const r of [...m.rooms, ...(m.butcherRoom ? [m.butcherRoom] : [])]) if (tx >= r.x && ty >= r.y && tx < r.x + r.w && ty < r.y + r.h) return r;
+  return null;
 }

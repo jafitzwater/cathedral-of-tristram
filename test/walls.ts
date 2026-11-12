@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { T, setT, type LevelMap } from '../src/levels/types';
 import { generateL1 } from '../src/levels/cathedral';
-import { archCells, doorFacing, wallData, wallFade, wallPieces, FADE_ALPHA } from '../src/walls';
+import { archCells, doorFacing, wallData, wallFade, wallPieces, stackPieces, FADE_ALPHA, FADE_DIAG, WALL_COURSES, WALL_PX, WALL_STEP } from '../src/walls';
 import { groupsMiB, wantedGroups, type ArtManifest } from '../src/art';
 
 const man = JSON.parse(fs.readFileSync('public/art/manifest.json', 'utf8')) as ArtManifest;
@@ -65,17 +65,34 @@ assert.ok(arches > 100 && doors >= 25 && cols > 100, `pieces placed: ${arches} a
 for (const f of ['n', 'w']) for (const k of ['stoneWallDoorClosed', 'stoneWallDoorOpen', 'stoneWallArchway']) assert.ok(cellIds.has(`${k}_${f}`));
 assert.ok(cellIds.has('stoneColumn_n'));
 
-// D1 wall transparency: walls 1-4 diagonals in front of the hero and within 3 tiles across fade; behind / far stay solid
+// D1 wall transparency, widened in Order 9 for the ~168 px walls: walls up to FADE_DIAG diagonals in front and FADE_ACROSS
+// tiles across fade; behind / far / same diagonal stay solid; inside a room its whole near wall run fades (TransList)
 const H = [10, 10] as const;
+assert.ok(WALL_PX >= 160 && WALL_PX <= 200, `walls ${WALL_PX} px tall at hero 96`);
+assert.equal(FADE_DIAG, Math.ceil(WALL_PX / 16));
 assert.equal(wallFade(11, 11, ...H), FADE_ALPHA, 'directly in front');
-assert.equal(wallFade(12, 12, ...H), FADE_ALPHA);
 assert.equal(wallFade(11, 10, ...H), FADE_ALPHA, 'adjacent SE wall');
-assert.equal(wallFade(13, 10, ...H), FADE_ALPHA, '3 across');
-assert.equal(wallFade(14, 9, ...H), 1, 'too far across');
+assert.equal(wallFade(13, 13, ...H), FADE_ALPHA, '6 diagonals in front: a tall wall still covers the hero');
+assert.equal(wallFade(14, 10, ...H), FADE_ALPHA, '4 across');
+assert.equal(wallFade(15, 9, ...H), 1, 'too far across');
 assert.equal(wallFade(9, 9, ...H), 1, 'behind the hero');
 assert.equal(wallFade(10, 9, ...H), 1, 'NE wall is behind');
-assert.equal(wallFade(13, 13, ...H), 1, 'far in front (6 diagonals)');
+assert.equal(wallFade(10 + FADE_DIAG, 10 + FADE_DIAG, ...H), 1, 'beyond the wall height');
 assert.equal(wallFade(10.5, 10.5, 10.5, 10.5), 1, 'same diagonal');
+const room = { x: 4, y: 4, w: 16, h: 16 };
+assert.equal(wallFade(21, 6, 6, 6, room), FADE_ALPHA, "the room's far-across SE wall run fades while inside");
+assert.equal(wallFade(6, 21, 6, 6, room), FADE_ALPHA, 'SW wall run too');
+assert.equal(wallFade(6, 3, 6, 6, room), 1, "the room's back wall stays");
+assert.equal(wallFade(21, 6, 6, 6, null), 1, 'outside the room: only the local rule');
+// stacked courses: the lowest sits on the tile edge (dy 0), a door/arch only at the bottom with plain wall above
+const st = stackPieces('stoneWallDoorClosed_n', 'stoneWall_n');
+assert.equal(st.length, WALL_COURSES); assert.equal(st[0].dy, 0); assert.equal(st[0].id, 'stoneWallDoorClosed_n');
+assert.ok(st.slice(1).every((q, i) => q.id === 'stoneWall_n' && q.dy === -(i + 1) * WALL_STEP));
+// Order 9 L1 scale: D1 cells are 2x2 tiles -> corridors 2 tiles wide, rooms at least 4, the Butcher room 10x10 inside
+{
+  const L = generateL1(5);
+  assert.equal(L.w, 80); assert.equal(L.butcherRoom!.w, 10); assert.ok(L.rooms.every((r) => r.w >= 4 && r.h >= 4 && r.w % 2 === 0 && r.h % 2 === 0));
+}
 
 // memory: the wall pieces load with the dungeon tiles (Order 7 split), and every zone set stays within 32 MiB
 assert.ok(man.groups['dungeon-tiles'].includes('tiles/walls-props'));

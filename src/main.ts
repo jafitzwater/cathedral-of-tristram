@@ -83,8 +83,9 @@ function fit() {
   canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
   const cs = getComputedStyle(safe);
   inset.l = parseFloat(cs.paddingLeft) || 0; inset.r = parseFloat(cs.paddingRight) || 0; inset.t = parseFloat(cs.paddingTop) || 0; inset.b = parseFloat(cs.paddingBottom) || 0;
-  // world zoom: D1's 352 px play-area height fills the screen height (Immortal-like close camera); width shows more
-  view.zoom = Math.max(1, H / 352); view.w = W / view.zoom; view.h = H / view.zoom;
+  // Order 9: world zoom shows about D1's 640x352 play area (same area, the phone's aspect): on 844x390 that is ~698x323 world px.
+  // The HUD and touch controls are drawn in css px, so they keep their size.
+  view.zoom = Math.max(1, Math.sqrt((W * H) / (640 * 352))); view.w = W / view.zoom; view.h = H / view.zoom;
   hud.lay = { W, H, dpr, inset: { ...inset } };
 }
 addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 200)); fit();

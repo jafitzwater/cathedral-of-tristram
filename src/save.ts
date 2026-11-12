@@ -52,8 +52,17 @@ export function deserialize(s: SaveData): Game {
   if (!Array.isArray(g.hero.slots)) g.hero.slots = defaultSlots(g.hero.cls, g.hero.spells, null); // pre-Order-4 saves
   g.quests = s.quests; g.stores = s.stores; g.portal = s.portal; g.townDead = new Set(s.townDead);
   setUidSeq(s.uid);
+  let regenL1 = false;
   for (const [id, sl] of Object.entries(s.levels) as [LevelId, SavedLevel][]) {
     const lv = g.makeLevel(id);
+    // Order 9: pre-Order-9 Cathedral saves are on the old 56x56 one-tile-per-cell map. Like D1 (which regenerates a level from
+    // its seed on entry) the level is rebuilt fresh from the same seed; its saved monsters/items/objects no longer fit it.
+    if (id !== 'town' && sl.tiles.length !== lv.map.tiles.length) {
+      regenL1 = true;
+      if (s.quests?.butcher === 'done') lv.monsters = lv.monsters.filter((m) => m.def.id !== 'butcher'); // he stays dead
+      g.levels[id] = lv;
+      continue;
+    }
     // Town is static and rebuilt from makeTown (Order 7 moved its buildings), so a save's town tiles/objects are not restored.
     if (id !== 'town') { lv.map.tiles = Uint8Array.from(sl.tiles); lv.map.objects = sl.objects; }
     lv.explored = unb64(sl.explored, lv.map.w * lv.map.h);
@@ -69,6 +78,7 @@ export function deserialize(s: SaveData): Game {
   g.cur = s.cur;
   g.rng = new Rng(s.rng); g.monUid = s.monUid; // restore last: rebuilding levels above draws from the rng and monster uids
   g.p = actorAt(s.pos.x, s.pos.y);
+  if (regenL1) { g.portal = null; if (g.cur !== 'town') { const st = g.levels[g.cur]!.map.start; g.p = actorAt(st.x, st.y); } }
   if (g.cur === 'town') { // pre-Order-7 town positions or dropped items may now sit inside a building
     const near = (x: number, y: number) => { for (let r = 0; r < 48; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (g.tileWalk(x + dx, y + dy)) return { x: x + dx, y: y + dy }; return { x, y }; };
     const f = near(s.pos.x, s.pos.y); g.p = actorAt(f.x, f.y);
