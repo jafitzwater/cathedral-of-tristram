@@ -35,8 +35,8 @@ const slide = stepFor({ x: 1, y: 0, mag: 1 }, { x: 5, y: 5 }, (x, y) => !(x === 
 assert.ok(slide >= 0 && slide !== 6, `slides (${slide})`);
 assert.equal(stepFor({ x: 1, y: 0, mag: 1 }, { x: 5, y: 5 }, () => false), -1);
 assert.equal(stepFor({ x: 0, y: 0, mag: 0 }, { x: 5, y: 5 }, open), -1);
-// hysteresis keeps the previous direction on a boundary
-const ea = Math.atan2(16, 32) / 2 + 0.005, edge = { x: Math.cos(ea), y: Math.sin(ea), mag: 1 }; // just past the E/SE boundary
+// hysteresis keeps the previous direction on a boundary (Order 9: 45-degree sectors, 8 degrees of hysteresis; test/joystick.ts)
+const ea = 22.5 * Math.PI / 180 + 0.01, edge = { x: Math.cos(ea), y: Math.sin(ea), mag: 1 }; // just past the E/SE boundary
 const a0 = stepFor(edge, { x: 5, y: 5 }, open), other = rankDirs(edge.x, edge.y)[1].dir;
 assert.equal(stepFor(edge, { x: 5, y: 5 }, open, other), other); assert.equal(stepFor(edge, { x: 5, y: 5 }, open, a0), a0);
 

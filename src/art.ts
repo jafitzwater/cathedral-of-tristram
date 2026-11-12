@@ -143,7 +143,19 @@ export function drawImg(c: CanvasRenderingContext2D, key: string, x: number, y: 
 }
 
 /** D1 direction index (iso.ts DIRS: 0 S, 1 SW, 2 W, 3 NW, 4 N, 5 NE, 6 E, 7 SE) -> art facing name. */
-export const DIR_NAME = ['s', 'sw', 'w', 'nw', 'n', 'ne', 'e', 'se'] as const;
+/**
+ * Order 9: art facing label per engine direction (DIRS index: S, SW, W, NW, N, NE, E, SE). The art's compass labels are
+ * mirrored on screen: render_actor.py orbits the camera +yaw around a character facing -Y, so its 'e' frames face screen-left
+ * and its 'se' frames face screen down-left (checked on the rendered sprites: Cain's beard, the heroes' chests). So screen
+ * down-left (SW) uses 'se', left (W) uses 'e', and so on; S and N are unchanged.
+ */
+export const DIR_NAME = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'] as const;
+/** Render-rig yaw per art label (render_actor.py YAW) and the screen angle (degrees, 0 = right, y down) its frames face. */
+export const ART_YAW: Record<string, number> = { s: 0, se: 45, e: 90, ne: 135, n: 180, nw: 225, w: 270, sw: 315 };
+export function artScreenAngle(label: string, elevDeg = 30): number {
+  const y = ART_YAW[label] * Math.PI / 180, a = Math.atan2(Math.cos(y) * Math.sin(elevDeg * Math.PI / 180), -Math.sin(y)) * 180 / Math.PI;
+  return ((a % 360) + 360) % 360;
+}
 /**
  * Frame index for an action. Looping actions (idle, walk, talk) run at the manifest timings. Timed actions (attack, cast, hit)
  * are spread over the game's D1 duration (`progress` 0..1) so the hit lands on the same frame as the rules; death plays at the

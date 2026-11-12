@@ -23,24 +23,48 @@ export function knob(ox: number, oy: number, tx: number, ty: number, radius = JO
   if (d <= radius) return { x: tx, y: ty };
   return { x: ox + dx / d * radius, y: oy + dy / d * radius };
 }
-const SCREEN_DIRS = DIRS.map((d) => { const s = tileToScreen(d.x, d.y), l = Math.hypot(s.x, s.y); return { x: s.x / l, y: s.y / l }; });
-/** The 8 D1 directions ordered by how well they match a screen-space stick vector (best first), with their alignment (dot). */
+/**
+ * Order 9: the stick's SCREEN angle picks one of 8 equal 45-degree sectors (0 = right, clockwise with y down), and each sector
+ * maps to the world step that moves that way on screen with the engine's axes (tileToScreen: +x = down-right, +y = down-left):
+ * right = E (+1,-1), down-right = SE (+1,0), down = S (+1,+1), down-left = SW (0,+1), left = W (-1,+1), up-left = NW (-1,0),
+ * up = N (-1,-1), up-right = NE (0,-1). (On the 2:1 view the diagonal steps sit at 26.57 degrees, not 45.)
+ */
+export const SECTOR_DIR = [6, 7, 0, 1, 2, 3, 4, 5] as const;
+export const DIR_SECTOR = SECTOR_DIR.reduce((o, d, k) => { o[d] = k; return o; }, [] as number[]);
+export const STICK_HYSTERESIS_DEG = 8;
+const DEG = 180 / Math.PI;
+/** Stick angle in degrees, 0..360, screen space (0 = right, 90 = down). */
+export const stickAngle = (jx: number, jy: number) => ((Math.atan2(jy, jx) * DEG) % 360 + 360) % 360;
+/** Smallest angle between two directions in degrees. */
+export const angleDiff = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+/** Screen angle (degrees) of a world step direction (DIRS index). */
+export function dirScreenAngle(dir: number): number { const d = DIRS[dir], s = tileToScreen(d.x, d.y); return stickAngle(s.x, s.y); }
+/** The 8 directions ordered by how close their stick sector is to the stick angle (best first). */
 export function rankDirs(jx: number, jy: number): { dir: number; dot: number }[] {
-  return SCREEN_DIRS.map((s, dir) => ({ dir, dot: s.x * jx + s.y * jy })).sort((a, b) => b.dot - a.dot);
+  const a = stickAngle(jx, jy);
+  return SECTOR_DIR.map((dir, k) => ({ dir, dot: Math.cos(angleDiff(a, k * 45) / DEG) })).sort((p, q) => q.dot - p.dot);
 }
-/** 8-way quantisation of the stick (index into DIRS), or -1 when centred. */
-export function stickDir(j: Joy): number { return j.mag > 0 ? rankDirs(j.x, j.y)[0].dir : -1; }
-/** Next tile for continuous walking: the best-matching direction, else slide along a wall with a neighbour direction within 60°. */
-export function stepFor(j: Joy, from: P, canStep: (x: number, y: number, dir: number) => boolean, prevDir = -1): number {
+/**
+ * 8-way sector of the stick (index into DIRS), or -1 when centred. With prevDir the previous sector is kept until the stick
+ * leaves it by more than STICK_HYSTERESIS_DEG, so a thumb on a boundary does not flicker but a clear move switches at once.
+ */
+export function stickDir(j: Joy, prevDir = -1): number {
   if (j.mag <= 0) return -1;
-  const r = rankDirs(j.x, j.y);
-  // hysteresis: keep the previous direction when it is nearly as good, so a thumb on a boundary does not zig-zag
-  if (prevDir >= 0 && r[0].dir !== prevDir) { const pv = r.find((e) => e.dir === prevDir)!; if (pv.dot > r[0].dot - 0.04) { r.splice(r.indexOf(pv), 1); r.unshift(pv); } }
-  for (const e of r.slice(0, 3)) {
-    if (e.dot < 0.5) break;
-    const d = DIRS[e.dir];
-    if (canStep(from.x + d.x, from.y + d.y, e.dir)) return e.dir;
-  }
+  const a = stickAngle(j.x, j.y);
+  if (prevDir >= 0 && angleDiff(a, DIR_SECTOR[prevDir] * 45) <= 22.5 + STICK_HYSTERESIS_DEG) return prevDir;
+  return SECTOR_DIR[Math.round(a / 45) % 8];
+}
+/**
+ * Next tile while the stick is held: step straight in the stick's sector; only when that tile is blocked, slide along the wall
+ * with the neighbouring sector nearer the stick angle, then the other one. No pathfinding, so no wandering.
+ */
+export function stepFor(j: Joy, from: P, canStep: (x: number, y: number, dir: number) => boolean, prevDir = -1): number {
+  const dir = stickDir(j, prevDir);
+  if (dir < 0) return -1;
+  const k = DIR_SECTOR[dir], a = stickAngle(j.x, j.y);
+  const left = SECTOR_DIR[(k + 7) % 8], right = SECTOR_DIR[(k + 1) % 8];
+  const slides = angleDiff(a, ((k + 7) % 8) * 45) <= angleDiff(a, ((k + 1) % 8) * 45) ? [left, right] : [right, left];
+  for (const d of [dir, ...slides]) if (canStep(from.x + DIRS[d].x, from.y + DIRS[d].y, d)) return d;
   return -1;
 }
 

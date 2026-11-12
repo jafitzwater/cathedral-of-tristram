@@ -6,7 +6,7 @@ import { BASE, IDI } from './data/items';
 import { NPC_TEXT } from './data/npcs';
 import { findPath } from './path';
 import { DIRS, dirOf, type P } from './iso';
-import { pickTarget, stepFor, rankDirs, interactFor, type Joy, type Interact } from './controls';
+import { pickTarget, stepFor, stickDir, interactFor, type Joy, type Interact } from './controls';
 import { Rng } from './rng';
 import { T, WALKABLE, at, setT, type LevelMap, type Obj } from './levels/types';
 import { makeTown, NPCS, TOWN_FROM_CATHEDRAL, TOWN_PORTAL_SPOT, TOWN_START, type NpcDef } from './levels/town';
@@ -199,7 +199,7 @@ export class Game {
     this.doSpell(s.id, slvl, tx, ty);
   }
   /** Facing in tile space: the stick when it is held, else the hero's facing. */
-  facing(): P { const j = this.move; return j && j.mag > 0 ? DIRS[rankDirs(j.x, j.y)[0].dir] : DIRS[this.p.dir] ?? DIRS[0]; }
+  facing(): P { const j = this.move; return j && j.mag > 0 ? DIRS[stickDir(j, this.lastMoveDir)] : DIRS[this.p.dir] ?? DIRS[0]; }
   /** Soft-lock auto-target (nearest visible monster in range, facing-biased; keeps the current lock while valid). */
   autoTarget(range: number): Mon | null {
     const p = this.p, here = { x: p.tx, y: p.ty };
