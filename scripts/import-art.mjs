@@ -29,7 +29,7 @@ for (const f of ['tiles/floors.json', 'tiles/plants.json', 'tiles/walls-props.js
   const frames = meta.frames.map((fr) => {
     const [x, y] = fr.atlas_xy; const [fw, fh] = fr.size_wh ?? fr.size_px_wh;
     const [ax, ay] = fr.anchor_in_frame_px ?? [0, 0];
-    return { id: fr.id, x, y, w: fw, h: fh, ax, ay, ...(fr.size_slots_wh ? { slots: fr.size_slots_wh } : {}) };
+    return { id: fr.id, x, y, w: fw, h: fh, ax, ay, ...(fr.size_slots_wh ? { slots: fr.size_slots_wh } : {}), ...(fr.trim_xy && fr.src_scaled_wh ? { cell: fr.trim_xy } : {}) };
   });
   assets.push({ key: f.replace('.json', ''), group: 'shared', type: 'atlas', file: copy(`${dir}/${meta.atlas}`), w, h, mib: mib(w, h), frames, ...L });
 }

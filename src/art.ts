@@ -3,7 +3,7 @@
 // The game asks for a set of groups per zone (wantedGroups); assets outside the set are released (ImageBitmap.close) before new
 // ones are fetched, so resident decoded memory never exceeds the zone's sum. Until an atlas is decoded, callers get `false`
 // and draw a fallback silhouette.
-export interface Frame { id: string; x: number; y: number; w: number; h: number; ax: number; ay: number; ms?: number; slots?: [number, number] }
+export interface Frame { id: string; x: number; y: number; w: number; h: number; ax: number; ay: number; ms?: number; slots?: [number, number]; cell?: [number, number] }
 export interface ArtAsset { key: string; group: string; type: 'atlas' | 'image'; file: string; w: number; h: number; mib: number; frames?: Frame[]; license: string; author: string; source: string }
 export interface AnimInfo { n: number; ms: number; asset: string }
 export interface ArtManifest { version: number; groups: Record<string, string[]>; anims: Record<string, { kind: string; height: number; actions: Record<string, AnimInfo> }>; assets: ArtAsset[] }
@@ -116,6 +116,16 @@ export function drawFrame(c: CanvasRenderingContext2D, id: string, x: number, y:
   const { f, img } = e;
   if (flip) { c.save(); c.translate(Math.round(x), 0); c.scale(-1, 1); c.drawImage(img, f.x, f.y, f.w, f.h, -Math.round(f.ax * scale), Math.round(y - f.ay * scale), Math.round(f.w * scale), Math.round(f.h * scale)); c.restore(); return true; }
   c.drawImage(img, f.x, f.y, f.w, f.h, Math.round(x - f.ax * scale), Math.round(y - f.ay * scale), Math.round(f.w * scale), Math.round(f.h * scale));
+  return true;
+}
+/**
+ * Kenney dungeon pieces: draw a frame at its place in the 64x128 source cell. The cell's slab-bottom diamond (cell y 96..128)
+ * lands on the game tile whose top tip is (sx, sy), so wall bases sit on the tile edges.
+ */
+export function drawCell(c: CanvasRenderingContext2D, id: string, sx: number, sy: number): boolean {
+  const e = art.frame(id); if (!e || !e.f.cell) return false;
+  const { f, img } = e;
+  c.drawImage(img, f.x, f.y, f.w, f.h, Math.round(sx - 32 + f.cell![0]), Math.round(sy - 96 + f.cell![1]), f.w, f.h);
   return true;
 }
 /** Draw a frame fitted (aspect kept, centred) in a box. */
