@@ -1,15 +1,13 @@
-// Canvas 2D isometric world renderer. Placeholder shapes for anything the art pack has not delivered.
-import { TILE_H, TILE_W, view, tileToScreen, DIRS, pickTile, type P } from './iso';
+// Canvas 2D isometric world renderer. Actors come from the CC0 atlases (src/art.ts) at their packed scale; while an atlas is
+// still loading (or released by the zone groups) a dim silhouette stands in.
+import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './iso';
+import type { NpcDef } from './levels/town';
 import { T, TALL, at } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
-import { drawArt, drawFrame, hasFrame } from './art';
+import { art, drawActor, drawFrame, hasFrame, MON_ART } from './art';
 import { itemIconId } from './hud';
 import type { Actor, Game, Target } from './game';
 
-const MON_COLOR: Record<string, [string, number]> = {
-  zombie: ['#6a7a4a', 1], fallen: ['#b04030', 0.75], fallen_sword: ['#c05030', 0.75], skeleton: ['#d8d0b8', 0.95],
-  skeleton_captain: ['#e8e0c0', 1.05], scavenger: ['#8a6a4a', 0.8], butcher: ['#a02020', 1.6],
-};
 const LIGHT_R = 10;
 
 export function camera(g: Game) {
@@ -49,9 +47,9 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
     if (vis(pp.x, pp.y)) ents.push({ s: pp.x + pp.y, draw: () => drawPortal(c, pp, cam, time) });
   }
   for (const gi of lv.items) if (vis(gi.x, gi.y)) ents.push({ s: gi.x + gi.y - 0.1, draw: () => drawItem(c, gi.item, gi.x, gi.y, cam, sprites, gi) });
-  for (const mo of lv.monsters) if (vis(mo.x, mo.y)) ents.push({ s: mo.x + mo.y + (mo.alive ? 0 : -0.2), draw: () => drawMon(c, g, mo, cam, sprites, lightAt(mo.x, mo.y)) });
-  for (const n of g.npcs()) ents.push({ s: n.x + n.y, draw: () => { const p = tileToScreen(n.x, n.y); const x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2; if (!drawArt(c, `npc_${n.id}`, x, y)) figure(c, x, y, n.color, 1, '#000'); sprites.push({ t: { kind: 'npc', npc: n }, x: x - 14, y: y - 60, w: 28, h: 62, depth: n.x + n.y }); } });
-  if (!g.dead || true) ents.push({ s: pd, draw: () => drawPlayer(c, g, g.p, cam) });
+  for (const mo of lv.monsters) if (vis(mo.x, mo.y)) ents.push({ s: mo.x + mo.y + (mo.alive ? 0 : -0.2), draw: () => drawMon(c, g, mo, cam, sprites, lightAt(mo.x, mo.y), time) });
+  for (const n of g.npcs()) ents.push({ s: n.x + n.y, draw: () => drawNpc(c, g, n, cam, sprites, time) });
+  if (!g.dead || true) ents.push({ s: pd, draw: () => drawPlayer(c, g, g.p, cam, time) });
   ents.sort((a, b) => a.s - b.s);
   let ei = 0;
   for (let s = 0; s < m.w + m.h - 1; s++) {
@@ -127,40 +125,87 @@ function shade(c: CanvasRenderingContext2D, col: string, k: number) {
   const f = (v: number) => Math.round(v * k);
   c.fillStyle = `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
 }
-function figure(c: CanvasRenderingContext2D, x: number, y: number, col: string, scale: number, outline: string) {
-  c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(x, y, 13 * scale, 6 * scale, 0, 0, Math.PI * 2); c.fill();
-  c.fillStyle = col; c.strokeStyle = outline; c.lineWidth = 1;
-  c.fillRect(x - 7 * scale, y - 38 * scale, 14 * scale, 36 * scale); c.strokeRect(x - 7 * scale, y - 38 * scale, 14 * scale, 36 * scale);
-  c.beginPath(); c.arc(x, y - 44 * scale, 6.5 * scale, 0, Math.PI * 2); c.fill(); c.stroke();
+/** Stand-in while an actor's atlas is not resident: a shadow and a dim silhouette of the actor's standing height. */
+function silhouette(c: CanvasRenderingContext2D, x: number, y: number, h: number) {
+  shadow(c, x, y, h);
+  c.fillStyle = 'rgba(20,16,12,0.55)'; const w = h * 0.2;
+  c.beginPath(); c.ellipse(x, y - h * 0.42, w, h * 0.38, 0, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(x, y - h * 0.86, w * 0.7, 0, Math.PI * 2); c.fill();
 }
-function facing(c: CanvasRenderingContext2D, x: number, y: number, dir: number, len: number) {
-  const d = DIRS[dir] ?? DIRS[0], f = tileToScreen(d.x, d.y), l = Math.hypot(f.x, f.y) || 1;
-  c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.moveTo(x, y); c.lineTo(x + (f.x / l) * len, y + (f.y / l) * len); c.stroke();
+function shadow(c: CanvasRenderingContext2D, x: number, y: number, h: number) {
+  c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(x, y, h * 0.18, h * 0.08, 0, 0, Math.PI * 2); c.fill();
 }
-function drawPlayer(c: CanvasRenderingContext2D, g: Game, a: Actor, cam: P) {
+/** Per-actor state clock: when the state changed and its countdown at that moment (for progress through timed actions). */
+const clock = new WeakMap<object, { s: string; t0: number; d0: number }>();
+function stateClock(o: object, s: string, now: number, t: number) {
+  let e = clock.get(o);
+  if (!e || e.s !== s) { e = { s, t0: now, d0: Math.max(t, 1e-3) }; clock.set(o, e); }
+  return { ms: (now - e.t0) * 1000, progress: 1 - Math.max(0, t) / e.d0 };
+}
+const heightOf = (actor: string, dflt: number) => art.m?.anims[actor]?.height ?? dflt;
+/** Map a game state to an art action (+ progress for timed actions). Looping actions use the global clock so walk cycles
+ * don't restart between tile steps. */
+function actorPose(o: Actor, now: number, deathMs?: number): { action: string; ms: number; progress?: number } {
+  const ck = stateClock(o, o.state, now, o.t);
+  switch (o.state) {
+    case 'attack': case 'cast': case 'hit': return { action: o.state, ms: ck.ms, progress: ck.progress };
+    case 'block': return { action: 'hit', ms: 0, progress: 0 }; // no block sheet: hold the first hit frame
+    case 'dead': return { action: 'death', ms: deathMs ?? ck.ms };
+    case 'walk': return { action: 'walk', ms: now * 1000 };
+    default: return { action: 'idle', ms: now * 1000 };
+  }
+}
+function drawPlayer(c: CanvasRenderingContext2D, g: Game, a: Actor, cam: P, time: number) {
   const p = tileToScreen(a.x, a.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
-  if (g.dead) { c.fillStyle = '#6a1010'; c.beginPath(); c.ellipse(x, y, 18, 8, 0, 0, Math.PI * 2); c.fill(); return; }
-  const col = { warrior: '#b89a5a', rogue: '#5a8a5a', sorcerer: '#5a6ab8' }[g.hero.cls];
-  if (!drawArt(c, `hero_${g.hero.cls}_${a.state}`, x, y, a.dir)) {
-    figure(c, x, y, a.state === 'hit' ? '#fff' : col, 1, '#000');
-    if (a.state === 'attack' || a.state === 'cast') facing(c, x, y - 22, a.dir, 22); else facing(c, x, y - 22, a.dir, 12);
+  const cls = g.hero.cls, h = heightOf(cls, 96);
+  const pose = g.dead ? { action: 'death', ms: stateClock(a, 'dead', time, 0).ms } : actorPose(a, time);
+  shadow(c, x, y, h);
+  if (!drawActor(c, cls, pose.action, a.dir, pose.ms, x, y, pose.progress)) {
+    // combat sheet still decoding: stand in with the town sheet's idle, else the silhouette
+    if (!drawActor(c, cls, a.state === 'walk' ? 'walk' : 'idle', a.dir, time * 1000, x, y)) silhouette(c, x, y, h);
   }
 }
-function drawMon(c: CanvasRenderingContext2D, g: Game, mo: Game['level']['monsters'][number], cam: P, sprites: Sprite[], lit: number) {
+function drawNpc(c: CanvasRenderingContext2D, g: Game, n: NpcDef, cam: P, sprites: Sprite[], time: number) {
+  const p = tileToScreen(n.x, n.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
+  if (n.id === 'wounded') { // no sheet for the dying townsman (not in the art set): a body lying in blood
+    c.fillStyle = 'rgba(90,10,10,0.8)'; c.beginPath(); c.ellipse(x + 4, y, 26, 10, 0, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#4a3a2e'; c.beginPath(); c.ellipse(x - 2, y - 4, 20, 6, -0.25, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#c8a080'; c.beginPath(); c.arc(x + 18, y - 9, 5, 0, Math.PI * 2); c.fill();
+    sprites.push({ t: { kind: 'npc', npc: n }, x: x - 26, y: y - 24, w: 52, h: 32, depth: n.x + n.y });
+    return;
+  }
+  const talking = g.dialog?.npc === n, h = heightOf(n.id, 96);
+  // D1 town NPCs face the hero while talking, otherwise they keep their post's facing (south)
+  const dir = talking || Math.max(Math.abs(g.p.x - n.x), Math.abs(g.p.y - n.y)) <= 3 ? Math.max(0, dirOf(Math.round(g.p.x) - n.x, Math.round(g.p.y) - n.y)) : 0;
+  const ms = time * 1000 + (n.x * 37 + n.y * 11) * 10;
+  shadow(c, x, y, h);
+  if (!drawActor(c, n.id, talking ? 'talk' : 'idle', dir, ms, x, y)) silhouette(c, x, y, h);
+  sprites.push({ t: { kind: 'npc', npc: n }, x: x - 18, y: y - h * 0.9, w: 36, h: h * 0.9 + 4, depth: n.x + n.y });
+}
+function drawMon(c: CanvasRenderingContext2D, g: Game, mo: Game['level']['monsters'][number], cam: P, sprites: Sprite[], lit: number, time: number) {
   const p = tileToScreen(mo.x, mo.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
-  const [col, sc] = MON_COLOR[mo.def.id] ?? ['#888', 1];
-  if (!mo.alive) { c.globalAlpha = Math.max(0.3, lit); c.fillStyle = '#3a1a10'; c.beginPath(); c.ellipse(x, y, 14 * sc, 6 * sc, 0, 0, Math.PI * 2); c.fill(); c.globalAlpha = 1; return; }
-  if (g.lockId === mo.uid) { // Immortal soft-lock ring
-    c.strokeStyle = 'rgba(255,60,30,0.9)'; c.lineWidth = 2; c.beginPath(); c.ellipse(x, y, 20 * sc, 10 * sc, 0, 0, Math.PI * 2); c.stroke();
-    c.strokeStyle = 'rgba(255,160,60,0.5)'; c.lineWidth = 1; c.beginPath(); c.ellipse(x, y, 24 * sc, 12 * sc, 0, 0, Math.PI * 2); c.stroke();
-  }
+  const actor = MON_ART[mo.def.id] ?? mo.def.id, h = heightOf(actor, 64);
   c.globalAlpha = Math.max(0.35, lit);
-  if (!drawArt(c, `mon_${mo.def.id}_${mo.state}`, x, y, mo.dir)) {
-    figure(c, x, y, mo.flash > 0 ? '#fff' : col, sc, g.target?.kind === 'mon' && g.target.m === mo ? '#f00' : '#000');
-    facing(c, x, y - 20 * sc, mo.dir, mo.state === 'attack' ? 20 : 10);
+  if (!mo.alive) {
+    // corpse: last death frame while the type's combat sheet is resident, else a blood pool
+    if (!drawActor(c, actor, 'death', mo.dir, mo.deathT * 1000, x, y)) { c.fillStyle = '#3a1a10'; c.beginPath(); c.ellipse(x, y, h * 0.22, h * 0.09, 0, 0, Math.PI * 2); c.fill(); }
+    c.globalAlpha = 1; return;
   }
+  if (g.lockId === mo.uid) { // Immortal soft-lock ring
+    const r = Math.max(16, h * 0.3);
+    c.strokeStyle = 'rgba(255,60,30,0.9)'; c.lineWidth = 2; c.beginPath(); c.ellipse(x, y, r, r / 2, 0, 0, Math.PI * 2); c.stroke();
+    c.strokeStyle = 'rgba(255,160,60,0.5)'; c.lineWidth = 1; c.beginPath(); c.ellipse(x, y, r + 4, r / 2 + 2, 0, 0, Math.PI * 2); c.stroke();
+  }
+  const pose = actorPose(mo, time + (mo.uid % 7) * 0.13);
+  shadow(c, x, y, h);
+  if (!drawActor(c, actor, pose.action, mo.dir, pose.ms, x, y, pose.progress)) {
+    // combat sheet not resident for this type (only one roamer type's is): idle/walk sheet, else the silhouette
+    if (!drawActor(c, actor, mo.state === 'walk' ? 'walk' : 'idle', mo.dir, time * 1000, x, y)) silhouette(c, x, y, h);
+  }
+  if (mo.flash > 0) { c.globalAlpha = Math.min(0.5, mo.flash * 4); c.fillStyle = '#fff'; c.beginPath(); c.ellipse(x, y - h * 0.45, h * 0.2, h * 0.42, 0, 0, Math.PI * 2); c.fill(); }
   c.globalAlpha = 1;
-  sprites.push({ t: { kind: 'mon', m: mo }, x: x - 16 * sc, y: y - 56 * sc, w: 32 * sc, h: 60 * sc, depth: mo.x + mo.y + 1 });
+  const bw = Math.max(32, h * 0.5);
+  sprites.push({ t: { kind: 'mon', m: mo }, x: x - bw / 2, y: y - h - 4, w: bw, h: h + 8, depth: mo.x + mo.y + 1 });
 }
 function drawObj(c: CanvasRenderingContext2D, g: Game, o: Game['level']['map']['objects'][number], cam: P, sprites: Sprite[], lit: number) {
   const p = tileToScreen(o.x, o.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;

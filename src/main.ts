@@ -6,7 +6,8 @@ import { Hud } from './hud';
 import { Screens, type Screen } from './screens';
 import { UI, type Box } from './ui';
 import { Audio } from './audio';
-import { loadArt } from './art';
+import { art, loadArt, wantedGroups } from './art';
+import { ZoneTracker } from './zones';
 import { VIEW_H, VIEW_W, view } from './iso';
 import { joystickVector } from './controls';
 import { T } from './levels/types';
@@ -21,7 +22,12 @@ const c = canvas.getContext('2d', { alpha: false })!;
 const ui = new UI();
 const opts = (() => { try { return JSON.parse(localStorage.getItem('cot.options') ?? '') as { music: number; sfx: number }; } catch { return { music: 7, sfx: 7 }; } })();
 const audio = new Audio(opts.music, opts.sfx);
-void loadArt(import.meta.env.BASE_URL).then((assets) => { for (const a of assets) if (a.type === 'sfx' || a.type === 'music') audio.files[a.key] = `${import.meta.env.BASE_URL}art/${a.file}`; });
+let artReady = false;
+void loadArt(import.meta.env.BASE_URL).then(() => { artReady = true; });
+// Order 5: zone-based lazy art groups (resident decoded memory <= 32 MiB). Loading screens wait for the destination's groups.
+const zones = new ZoneTracker();
+let artWait: Promise<void> | null = null, artDone = true, artWaitT = 0;
+const needArt = (groups: string[]) => { artDone = false; artWaitT = 0; artWait = art.setGroups(groups).then(() => { artDone = true; }); };
 
 let screen: Screen = 'title';
 let game: Game | null = null;
@@ -129,7 +135,8 @@ function frame(now: number) {
   ui.begin(c, dpr);
   if (screen === 'game' && game) {
     if (hud.menu === 'none' && !game.dialog) game.update(dt);
-    if (game.pendingLevel) { screen = 'loading'; loadT = 0.6; scr.t = 0; game.move = null; game.attackHeld = false; hud.joy = null; hud.attackDown = false; }
+    if (artReady) void art.setGroups(zones.update(game, dt));
+    if (game.pendingLevel) { needArt(wantedGroups(game.pendingLevel.to === 'town' ? 'town' : 'cathedral', game.hero.cls)); screen = 'loading'; loadT = 0.6; scr.t = 0; game.move = null; game.attackHeld = false; hud.joy = null; hud.attackDown = false; }
     for (const s of game.sfx) { audio.play(s); if (s === 'hit') buzz(15); else if (s === 'player_hit') buzz(40); else if (s === 'player_die') buzz([80, 50, 80]); }
     game.sfx.length = 0;
     c.setTransform(dpr * view.zoom, 0, 0, dpr * view.zoom, 0, 0);
@@ -143,13 +150,14 @@ function frame(now: number) {
     c.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
     if (screen === 'loading') {
       scr.draw(ui, 'loading', dt);
-      loadT -= dt;
-      if (loadT <= 0 && game) { game.finishTravel(); for (const sf of game.sfx) audio.play(sf); game.sfx.length = 0; screen = 'game'; }
-    } else scr.draw(ui, screen, dt);
+      loadT -= dt; artWaitT += dt;
+      if (game && artReady && !artWait) needArt(zones.update(game, 0));
+      if (loadT <= 0 && game && artReady && (artDone || artWaitT > 8)) { artWait = null; game.finishTravel(); for (const sf of game.sfx) audio.play(sf); game.sfx.length = 0; screen = 'game'; }
+    } else { if (artReady && !game) void art.setGroups(zones.update(null, dt)); scr.draw(ui, screen, dt); }
   }
   workMs += performance.now() - w0;
   if (frames === 0 && fpsLog.length) { workLog.push(+(workMs / Math.max(1, fpsLog[fpsLog.length - 1])).toFixed(2)); workMs = 0; if (workLog.length > 120) workLog.shift(); }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, size: () => [W, H, dpr] }; // read-only handle, only with ?smoke (headless smoke test)
+if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, size: () => [W, H, dpr], get art() { return { mib: art.mib, peak: art.peakMib, resident: art.residentKeys(), zone: zones.zone, engaged: zones.engaged, loads: art.loads, releases: art.releases, errors: art.errors }; } }; // read-only handle, only with ?smoke (headless smoke test)
