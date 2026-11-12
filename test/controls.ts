@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { joystickVector, knob, rankDirs, stickDir, stepFor, pickTarget, assignSlot, defaultSlots, interactFor, JOY_RADIUS, JOY_DEADZONE } from '../src/controls';
+import { joystickVector, knob, stickDir, moveCircle, HERO_RADIUS, pickTarget, assignSlot, defaultSlots, interactFor, JOY_RADIUS, JOY_DEADZONE } from '../src/controls';
 import { DIRS } from '../src/iso';
 import { Game } from '../src/game';
 import { actionLayout } from '../src/hud';
@@ -27,18 +27,16 @@ assert.deepEqual(DIRS[stickDir(iso(2, 1))], { x: 1, y: 0 }, 'screen down-right =
 assert.deepEqual(DIRS[stickDir(iso(-2, 1))], { x: 0, y: 1 }, 'screen down-left = SW (+y)');
 assert.equal(stickDir({ x: 0, y: 0, mag: 0 }), -1);
 assert.equal(new Set([0, 45, 90, 135, 180, 225, 270, 315].map((a) => stickDir({ x: Math.cos(a * Math.PI / 180), y: Math.sin(a * Math.PI / 180), mag: 1 }))).size, 8, 'all 8 directions reachable');
-assert.ok(rankDirs(1, 0)[0].dot > 0.99);
-// wall slide: pushing east into a wall slides along it; a dead end stops
-const open = () => true;
-assert.equal(stepFor(iso(1, 0), { x: 5, y: 5 }, open), 6);
-const slide = stepFor({ x: 1, y: 0, mag: 1 }, { x: 5, y: 5 }, (x, y) => !(x === 6 && y === 4));
-assert.ok(slide >= 0 && slide !== 6, `slides (${slide})`);
-assert.equal(stepFor({ x: 1, y: 0, mag: 1 }, { x: 5, y: 5 }, () => false), -1);
-assert.equal(stepFor({ x: 0, y: 0, mag: 0 }, { x: 5, y: 5 }, open), -1);
-// hysteresis keeps the previous direction on a boundary (Order 9: 45-degree sectors, 8 degrees of hysteresis; test/joystick.ts)
-const ea = 22.5 * Math.PI / 180 + 0.01, edge = { x: Math.cos(ea), y: Math.sin(ea), mag: 1 }; // just past the E/SE boundary
-const a0 = stepFor(edge, { x: 5, y: 5 }, open), other = rankDirs(edge.x, edge.y)[1].dir;
-assert.equal(stepFor(edge, { x: 5, y: 5 }, open, other), other); assert.equal(stepFor(edge, { x: 5, y: 5 }, open, a0), a0);
+// Order 9b: analog movement with a circle collider and wall slide (full coverage in test/joystick.ts)
+const open = () => false;
+const fr = moveCircle(5, 5, 0.5, 0, HERO_RADIUS, open); near(fr.x, 5.5); near(fr.y, 5);
+const wall = (x: number) => x === 6; // wall column at x = 6
+const sl = moveCircle(5, 5, 1, 1, HERO_RADIUS, wall);
+assert.ok(sl.x <= 5.5 - HERO_RADIUS + 1e-6 && sl.y > 5.9, `slides along the wall (${sl.x.toFixed(3)},${sl.y.toFixed(3)})`);
+const stuck = moveCircle(5, 5, 1, 0, HERO_RADIUS, (x, y) => !(x === 5 && y === 5)); near(stuck.x, 5.5 - HERO_RADIUS, 0.021); near(stuck.y, 5); // boxed in: stops at the edge
+// hysteresis keeps the previous facing on a boundary
+const ea = (13.28 + 1) * Math.PI / 180, edge = { x: Math.cos(ea), y: Math.sin(ea), mag: 1 }; // just past the E/SE boundary
+assert.equal(stickDir(edge), 7); assert.equal(stickDir(edge, 6), 6); assert.equal(stickDir(edge, 7), 7);
 
 // ---- target selection (soft lock) ----
 const vis = () => true;

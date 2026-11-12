@@ -6,7 +6,7 @@ import { BASE, IDI } from './data/items';
 import { NPC_TEXT } from './data/npcs';
 import { findPath } from './path';
 import { DIRS, dirOf, type P } from './iso';
-import { pickTarget, stepFor, stickDir, interactFor, type Joy, type Interact } from './controls';
+import { pickTarget, stickDir, faceToward, moveCircle, screenToWorldDir, HERO_RADIUS, interactFor, type Joy, type Interact } from './controls';
 import { Rng } from './rng';
 import { T, WALKABLE, at, setT, type LevelMap, type Obj } from './levels/types';
 import { makeTown, NPCS, TOWN_FROM_CATHEDRAL, TOWN_PORTAL_SPOT, TOWN_START, type NpcDef } from './levels/town';
@@ -23,6 +23,8 @@ import {
 
 export const TICK = 1 / 20; // D1 game tick
 export const WALK_TICKS = 8; // [JARULF] one tile per 8 ticks (town and dungeon in v1.09)
+/** Order 9b: hero analog walk speed in world tiles per second (D1: one tile per WALK_TICKS ticks). */
+export const WALK_SPEED = 1 / (WALK_TICKS * TICK);
 /** Attack animation length in ticks [TEMP: Jarulf weapon-speed table not re-checked]. */
 const ATTACK_TICKS: Record<ClassId, { melee: number; bow: number; cast: number }> = {
   warrior: { melee: 16, bow: 16, cast: 20 }, rogue: { melee: 18, bow: 12, cast: 16 }, sorcerer: { melee: 16, bow: 20, cast: 12 },
@@ -193,13 +195,15 @@ export class Game {
     else { removeItem(h, src.item!); if (h.skill === sel && !this.spellSource(sel)) h.skill = h.spells[s.id] ? s.id : 'skill'; }
     this.refresh();
     this.p.path = []; this.target = null;
-    this.p.dir = dirOf(tx - this.p.tx, ty - this.p.ty) >= 0 ? dirOf(tx - this.p.tx, ty - this.p.ty) : this.p.dir;
+    this.p.dir = faceToward(tx - this.p.x, ty - this.p.y, this.p.dir);
     this.p.state = 'cast'; this.p.t = ATTACK_TICKS[h.cls].cast * TICK; this.actTotal = this.p.t;
     this.sfx.push(`cast_${s.type}`);
     this.doSpell(s.id, slvl, tx, ty);
   }
   /** Facing in tile space: the stick when it is held, else the hero's facing. */
-  facing(): P { const j = this.move; return j && j.mag > 0 ? DIRS[stickDir(j, this.lastMoveDir)] : DIRS[this.p.dir] ?? DIRS[0]; }
+  facing(): P { const j = this.move; return j && j.mag > 0 ? screenToWorldDir(j.x, j.y) : DIRS[this.p.dir] ?? DIRS[0]; }
+  /** Facing sprite for the held stick (keeps the hysteresis state), else the current facing. */
+  stickFacing(): number { const j = this.move; return j && j.mag > 0 ? stickDir(j, this.lastMoveDir) : this.p.dir; }
   /** Soft-lock auto-target (nearest visible monster in range, facing-biased; keeps the current lock while valid). */
   autoTarget(range: number): Mon | null {
     const p = this.p, here = { x: p.tx, y: p.ty };
@@ -223,7 +227,7 @@ export class Game {
     let tx = p.tx, ty = p.ty;
     if (s.targeted) {
       const m = this.autoTarget(10);
-      if (m) { tx = m.tx; ty = m.ty; } else { const f = this.facing(); tx = p.tx + f.x * 6; ty = p.ty + f.y * 6; }
+      if (m) { tx = m.tx; ty = m.ty; } else { const f = this.facing(); tx = Math.round(p.x + f.x * 6); ty = Math.round(p.y + f.y * 6); }
     }
     this.castAt(tx, ty, id);
   }
@@ -242,7 +246,7 @@ export class Game {
     if (m) { this.target = { kind: 'mon', m }; return; }
     const b = this.level.map.objects.find((o) => !o.used && (o.kind === 'barrel' || o.kind === 'barrel_ex') && Math.max(Math.abs(o.x - p.tx), Math.abs(o.y - p.ty)) <= 1);
     if (b) { this.target = { kind: 'obj', o: b }; return; }
-    if (!this.target) { p.path = []; const f = this.facing(), dd = dirOf(f.x, f.y); if (dd >= 0) p.dir = dd; this.startAttack(null); }
+    if (!this.target) { p.path = []; const dd = this.stickFacing(); if (dd >= 0) p.dir = dd; this.startAttack(null); }
   }
   /** Where the selected spell comes from: learned spell, equipped staff charges, or a scroll in pack/belt. */
   spellSource(sel: string): { spell: string; from: 'spell' | 'staff' | 'scroll'; item?: Item } | null {
@@ -392,23 +396,52 @@ export class Game {
       if (p.t <= 0) { p.state = 'idle'; p.stepT = 0; }
       return;
     }
-    if (p.prog === 0) {
-      this.autoGold();
-      if (this.attackHeld) { this.autoAttack(); if ((p.state as string) === 'attack') return; }
-      else if (this.move && this.move.mag > 0) {
-        this.target = null;
-        const here = { x: p.tx, y: p.ty };
-        const dir = stepFor(this.move, here, (x, y) => this.free(x, y, p) && (x === p.tx || y === p.ty || (this.tileWalk(x, p.ty) && this.tileWalk(p.tx, y))), this.lastMoveDir);
-        if (dir >= 0) { p.path = [{ x: p.tx + DIRS[dir].x, y: p.ty + DIRS[dir].y }]; this.lastMoveDir = dir; }
-        else { p.path = []; const f = this.facing(), dd = dirOf(f.x, f.y); if (dd >= 0) p.dir = dd; }
-      } else this.lastMoveDir = -1;
-    }
+    this.autoGold();
+    if (this.attackHeld) { this.autoAttack(); if ((p.state as string) === 'attack') return; }
+    else if (this.move && this.move.mag > 0) {
+      // Order 9b: analog walk in the stick's exact screen direction; stops in place on release.
+      this.target = null; p.path = [];
+      const dir = stickDir(this.move, this.lastMoveDir);
+      this.lastMoveDir = dir; p.dir = dir;
+      const w = screenToWorldDir(this.move.x, this.move.y), d = WALK_SPEED * dt;
+      const moved = this.moveHero(w.x * d, w.y * d);
+      p.state = moved ? 'walk' : 'idle';
+      this.heroAtNode = true;
+      return;
+    } else this.lastMoveDir = -1;
     const t = this.target;
-    if (t && p.prog === 0) {
+    if (t && (this.heroAtNode || !p.path.length)) {
+      this.heroAtNode = false;
       if (this.actOnTarget(t)) return;
     }
-    const arrived = this.step(p, dt, WALK_TICKS * TICK);
-    if (arrived) this.onPlayerTile();
+    this.followPath(dt);
+  }
+  /** Tile-based D1 rules use the tile containing the hero (tiles are centred on integers, so that is floor(pos + 0.5)). */
+  heroTile() { const p = this.p; p.tx = Math.round(p.x); p.ty = Math.round(p.y); }
+  heroAtNode = true;
+  /** Move the hero's 0.35-tile circle with wall sliding; returns true when it moved. Fires the tile rules on a tile change. */
+  moveHero(dx: number, dy: number): boolean {
+    const p = this.p, ox = p.x, oy = p.y, otx = p.tx, oty = p.ty;
+    const q = moveCircle(p.x, p.y, dx, dy, HERO_RADIUS, (x, y) => !this.free(x, y, p));
+    p.x = q.x; p.y = q.y; this.heroTile();
+    if (p.tx !== otx || p.ty !== oty) this.onPlayerTile();
+    return Math.hypot(p.x - ox, p.y - oy) > 1e-6;
+  }
+  /** INTERACT / attack-move paths: glide from the current position to each waypoint's centre at walk speed (no snapping). */
+  followPath(dt: number) {
+    const p = this.p;
+    if (!p.path.length) { p.prog = 0; if (p.state === 'walk') p.state = 'idle'; return; }
+    const nx = p.path[0];
+    const diag = nx.x !== p.tx && nx.y !== p.ty;
+    if ((nx.x !== p.tx || nx.y !== p.ty) && (!this.free(nx.x, nx.y, p) || (diag && (!this.tileWalk(nx.x, p.ty) || !this.tileWalk(p.tx, nx.y))))) { p.path = []; p.state = 'idle'; this.heroAtNode = true; return; }
+    const vx = nx.x - p.x, vy = nx.y - p.y, dist = Math.hypot(vx, vy), d = WALK_SPEED * dt;
+    if (dist > 1e-9) p.dir = faceToward(vx, vy, p.dir);
+    p.state = 'walk';
+    const otx = p.tx, oty = p.ty;
+    if (dist <= d) { p.x = nx.x; p.y = nx.y; p.path.shift(); this.heroAtNode = true; }
+    else { p.x += vx / dist * d; p.y += vy / dist * d; }
+    this.heroTile();
+    if (this.heroAtNode || p.tx !== otx || p.ty !== oty) this.onPlayerTile();
   }
   attackTarget: Mon | Obj | null = null;
   /** Returns true when the player started an action this tick. */
@@ -441,7 +474,7 @@ export class Game {
   }
   startAttack(m: Mon | Obj | null) {
     const p = this.p, h = this.hero;
-    if (m) { const tx = 'def' in m ? m.tx : m.x, ty = 'def' in m ? m.ty : m.y; const dd = dirOf(tx - p.tx, ty - p.ty); if (dd >= 0) p.dir = dd; }
+    if (m) p.dir = faceToward(m.x - p.x, m.y - p.y, p.dir); // attacks face the target
     p.state = 'attack'; p.t = ATTACK_TICKS[h.cls][this.d.bow ? 'bow' : 'melee'] * TICK; p.stepT = 0; this.actTotal = p.t;
     this.attackTarget = m;
     this.sfx.push(this.d.bow ? 'bow' : 'swing');
@@ -721,7 +754,7 @@ export class Game {
     this.float(`${dam}`, p.x, p.y, '#f66');
     this.sfx.push('player_hit');
     if (h.hp <= 0) { h.hp = 0; this.die(); return; }
-    if (dam >= h.clvl && p.state !== 'attack') { p.state = 'hit'; p.t = hitRecoveryTicks(h, this.d) * TICK; p.path = []; p.prog = 0; p.x = p.tx; p.y = p.ty; }
+    if (dam >= h.clvl && p.state !== 'attack') { p.state = 'hit'; p.t = hitRecoveryTicks(h, this.d) * TICK; p.path = []; p.prog = 0; }
   }
   die() {
     this.dead = true; this.p.state = 'dead'; this.target = null;

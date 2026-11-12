@@ -50,4 +50,9 @@ for (let i = 0; i < 100; i++) g2.update(0.05);
 }
 deleteHero(st, 'Aidan');
 assert.deepEqual(listHeroes(st), []); assert.equal(loadGame(st, 'Aidan'), null);
+// Order 9b: analog positions are fractional; the save stores the hero's tile as before and loads at that tile's centre
+{ const fg = new Game('F', 'rogue', 21); const t0 = { x: fg.p.tx, y: fg.p.ty }; fg.p.x += 0.3; fg.p.y -= 0.2;
+  const sd = serialize(fg); assert.deepEqual(sd.pos, t0, 'stores the tile');
+  const lg = deserialize(JSON.parse(JSON.stringify(sd))); assert.deepEqual([lg.p.x, lg.p.y, lg.p.tx, lg.p.ty], [t0.x, t0.y, t0.x, t0.y], 'loads at the tile centre');
+  const odd = JSON.parse(JSON.stringify(sd)); odd.pos = { x: t0.x + 0.4, y: t0.y - 0.3 }; const og = deserialize(odd); assert.deepEqual([og.p.x, og.p.y], [t0.x, t0.y], 'a fractional saved position snaps to its tile centre'); }
 console.log('save ok');

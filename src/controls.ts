@@ -1,4 +1,4 @@
-// Diablo Immortal-style control math (pure, unit-tested): floating joystick, 8-direction stepping with wall slide,
+// Diablo Immortal-style control math (pure, unit-tested): floating joystick, analog movement with circle collision + wall slide,
 // soft-lock auto-targeting, skill-slot assignment and the contextual interact pick.
 import { DIRS, tileToScreen, type P } from './iso';
 import { T, at } from './levels/types';
@@ -24,48 +24,78 @@ export function knob(ox: number, oy: number, tx: number, ty: number, radius = JO
   return { x: ox + dx / d * radius, y: oy + dy / d * radius };
 }
 /**
- * Order 9: the stick's SCREEN angle picks one of 8 equal 45-degree sectors (0 = right, clockwise with y down), and each sector
- * maps to the world step that moves that way on screen with the engine's axes (tileToScreen: +x = down-right, +y = down-left):
- * right = E (+1,-1), down-right = SE (+1,0), down = S (+1,+1), down-left = SW (0,+1), left = W (-1,+1), up-left = NW (-1,0),
- * up = N (-1,-1), up-right = NE (0,-1). (On the 2:1 view the diagonal steps sit at 26.57 degrees, not 45.)
+ * Order 9b: analog movement (Diablo Immortal style). The hero moves continuously in the stick's exact SCREEN direction; the
+ * world velocity is the inverse of the 2:1 iso projection (tileToScreen: sx = (x-y)*32, sy = (x+y)*16), normalised to the D1
+ * walk speed in world distance. The facing sprite is the one of the 8 whose on-screen art direction is nearest the stick.
+ * Order of the 8 directions by screen angle (0 = right, clockwise with y down): E, SE, S, SW, W, NW, N, NE.
  */
 export const SECTOR_DIR = [6, 7, 0, 1, 2, 3, 4, 5] as const;
 export const DIR_SECTOR = SECTOR_DIR.reduce((o, d, k) => { o[d] = k; return o; }, [] as number[]);
 export const STICK_HYSTERESIS_DEG = 8;
+export const HERO_RADIUS = 0.35; // tiles: the hero's collision circle
 const DEG = 180 / Math.PI;
 /** Stick angle in degrees, 0..360, screen space (0 = right, 90 = down). */
 export const stickAngle = (jx: number, jy: number) => ((Math.atan2(jy, jx) * DEG) % 360 + 360) % 360;
 /** Smallest angle between two directions in degrees. */
 export const angleDiff = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
-/** Screen angle (degrees) of a world step direction (DIRS index). */
+const signedDiff = (a: number, b: number) => { const d = ((a - b) % 360 + 540) % 360 - 180; return d; };
+/** Screen angle (degrees) of a world step direction (DIRS index); equals its facing art's on-screen angle (test/joystick.ts). */
 export function dirScreenAngle(dir: number): number { const d = DIRS[dir], s = tileToScreen(d.x, d.y); return stickAngle(s.x, s.y); }
-/** The 8 directions ordered by how close their stick sector is to the stick angle (best first). */
-export function rankDirs(jx: number, jy: number): { dir: number; dot: number }[] {
-  const a = stickAngle(jx, jy);
-  return SECTOR_DIR.map((dir, k) => ({ dir, dot: Math.cos(angleDiff(a, k * 45) / DEG) })).sort((p, q) => q.dot - p.dot);
+/** Unit world-space vector that moves along screen vector (sx, sy): the inverse of the 2:1 iso projection. */
+export function screenToWorldDir(sx: number, sy: number): P {
+  const wx = sx / 64 + sy / 32, wy = sy / 32 - sx / 64, l = Math.hypot(wx, wy);
+  return l ? { x: wx / l, y: wy / l } : { x: 0, y: 0 };
 }
+const ART = SECTOR_DIR.map((d) => dirScreenAngle(d)); // ascending: 0, 26.57, 90, 153.43, 180, 206.57, 270, 333.43
 /**
- * 8-way sector of the stick (index into DIRS), or -1 when centred. With prevDir the previous sector is kept until the stick
- * leaves it by more than STICK_HYSTERESIS_DEG, so a thumb on a boundary does not flicker but a clear move switches at once.
+ * Facing (index into DIRS) for a screen-space direction: the sprite whose art direction is nearest the stick angle; its sector
+ * reaches halfway to each neighbouring art direction. With prevDir the previous sprite is kept until the stick leaves its sector by
+ * more than STICK_HYSTERESIS_DEG, so a thumb on a boundary does not flicker; a clear move switches at once. -1 when centred.
  */
 export function stickDir(j: Joy, prevDir = -1): number {
-  if (j.mag <= 0) return -1;
+  if (j.mag <= 0 || (j.x === 0 && j.y === 0)) return -1;
   const a = stickAngle(j.x, j.y);
-  if (prevDir >= 0 && angleDiff(a, DIR_SECTOR[prevDir] * 45) <= 22.5 + STICK_HYSTERESIS_DEG) return prevDir;
-  return SECTOR_DIR[Math.round(a / 45) % 8];
+  if (prevDir >= 0) {
+    const k = DIR_SECTOR[prevDir], lo = angleDiff(ART[k], ART[(k + 7) % 8]) / 2, hi = angleDiff(ART[k], ART[(k + 1) % 8]) / 2;
+    const d = signedDiff(a, ART[k]);
+    if (d >= -(lo + STICK_HYSTERESIS_DEG) && d <= hi + STICK_HYSTERESIS_DEG) return prevDir;
+  }
+  let best = 0;
+  for (let k = 1; k < 8; k++) if (angleDiff(a, ART[k]) < angleDiff(a, ART[best])) best = k;
+  return SECTOR_DIR[best];
+}
+/** Facing toward a world-space offset (attacks and casts face their target). */
+export function faceToward(dx: number, dy: number, fallback: number): number {
+  const s = tileToScreen(dx, dy);
+  const d = stickDir({ x: s.x, y: s.y, mag: 1 });
+  return d < 0 ? fallback : d;
 }
 /**
- * Next tile while the stick is held: step straight in the stick's sector; only when that tile is blocked, slide along the wall
- * with the neighbouring sector nearer the stick angle, then the other one. No pathfinding, so no wandering.
+ * Move a circle of radius r from (x, y) by (dx, dy) against blocked tiles (tile k spans k-0.5..k+0.5). Sub-stepped; a blocked step
+ * slides by dropping the blocked world axis (walls are axis-aligned in tile space). Diagonal wall gaps are closed because the two
+ * wall squares touch at the corner. An overlap that already exists (an actor stepped next to the hero) may shrink but never grow.
  */
-export function stepFor(j: Joy, from: P, canStep: (x: number, y: number, dir: number) => boolean, prevDir = -1): number {
-  const dir = stickDir(j, prevDir);
-  if (dir < 0) return -1;
-  const k = DIR_SECTOR[dir], a = stickAngle(j.x, j.y);
-  const left = SECTOR_DIR[(k + 7) % 8], right = SECTOR_DIR[(k + 1) % 8];
-  const slides = angleDiff(a, ((k + 7) % 8) * 45) <= angleDiff(a, ((k + 1) % 8) * 45) ? [left, right] : [right, left];
-  for (const d of [dir, ...slides]) if (canStep(from.x + DIRS[d].x, from.y + DIRS[d].y, d)) return d;
-  return -1;
+export function moveCircle(x: number, y: number, dx: number, dy: number, r: number, blocked: (tx: number, ty: number) => boolean): P {
+  const pen = (px: number, py: number, tx: number, ty: number) => {
+    const cx = Math.max(tx - 0.5, Math.min(tx + 0.5, px)), cy = Math.max(ty - 0.5, Math.min(ty + 0.5, py));
+    return r - Math.hypot(px - cx, py - cy);
+  };
+  const ok = (ox: number, oy: number, nx: number, ny: number) => {
+    for (let ty = Math.round(ny - r); ty <= Math.round(ny + r); ty++) for (let tx = Math.round(nx - r); tx <= Math.round(nx + r); tx++) {
+      const p = pen(nx, ny, tx, ty);
+      if (p > 1e-9 && blocked(tx, ty) && p > pen(ox, oy, tx, ty) + 1e-9) return false;
+    }
+    return true;
+  };
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 0.02)), sx = dx / n, sy = dy / n;
+  for (let i = 0; i < n; i++) {
+    if (ok(x, y, x + sx, y + sy)) { x += sx; y += sy; continue; }
+    const ax = ok(x, y, x + sx, y), ay = ok(x, y, x, y + sy);
+    if (ax && (!ay || Math.abs(sx) >= Math.abs(sy))) x += sx;
+    else if (ay) y += sy;
+    else break;
+  }
+  return { x, y };
 }
 
 export interface Cand { id: number; x: number; y: number }

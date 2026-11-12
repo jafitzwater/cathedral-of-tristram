@@ -77,11 +77,11 @@ export function deserialize(s: SaveData): Game {
   if (!g.levels[s.cur]) g.levels[s.cur] = g.makeLevel(s.cur);
   g.cur = s.cur;
   g.rng = new Rng(s.rng); g.monUid = s.monUid; // restore last: rebuilding levels above draws from the rng and monster uids
-  g.p = actorAt(s.pos.x, s.pos.y);
+  g.p = actorAt(Math.round(s.pos.x), Math.round(s.pos.y)); // Order 9b: a fractional position loads snapped to its tile centre
   if (regenL1) { g.portal = null; if (g.cur !== 'town') { const st = g.levels[g.cur]!.map.start; g.p = actorAt(st.x, st.y); } }
   if (g.cur === 'town') { // pre-Order-7 town positions or dropped items may now sit inside a building
     const near = (x: number, y: number) => { for (let r = 0; r < 48; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (g.tileWalk(x + dx, y + dy)) return { x: x + dx, y: y + dy }; return { x, y }; };
-    const f = near(s.pos.x, s.pos.y); g.p = actorAt(f.x, f.y);
+    const f = near(g.p.tx, g.p.ty); g.p = actorAt(f.x, f.y);
     for (const it of g.levels.town!.items) { const q = near(it.x, it.y); it.x = q.x; it.y = q.y; }
   }
   g.refresh();
