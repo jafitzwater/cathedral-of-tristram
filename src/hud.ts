@@ -14,6 +14,7 @@ import { Scroller } from './touch';
 import { itemPrice, sellPrice, boyPrice, repairCost, rechargeCost, IDENTIFY_COST, DUR_INDESTRUCTIBLE, type Item } from './itemgen';
 import { itemColor } from './render';
 import { drawFrameBox, drawImg } from './art';
+import { glassOrb, hudText, ironFrame, runeJoystick, socket, sweep, xpBar } from './hudSkin';
 import { assignSlot, knob, SLOT_COUNT, JOY_RADIUS } from './controls';
 import type { Game } from './game';
 import type { UI } from './ui';
@@ -59,6 +60,8 @@ export class Hud {
   carry: Item | null = null;
   /** Last touch position (css px), set by main.ts on every pointer event. */
   pointer = { x: 0, y: 0 };
+  /** UI sample: fingers currently down on HUD boxes (css px), for the sockets' pressed state. */
+  fingers = new Map<number, { x: number; y: number }>();
   constructor(private g: () => Game, private hooks: HudHooks) {}
 
   sc(key: string) { let s = this.scrollers.get(key); if (!s) { s = new Scroller(); this.scrollers.set(key, s); } return s; }
@@ -177,26 +180,26 @@ export class Hud {
   drawControls(ui: UI) {
     const g = this.g(), c = ui.c, h = g.hero, d = g.d, { W, H, inset } = this.lay;
     const L = inset.l + 10, Tp = inset.t + 8, R = W - inset.r - 10;
-    // --- status: level badge + life/mana orbs (CC0 orb art) + numbers + XP bar (top-left) ---
+    // --- status (UI sample): stone/iron plate, gold level medallion, glassy life/mana globes, Cinzel numbers, slim XP bar ---
+    const now = performance.now() / 1000;
     const bw = Math.min(190, W * 0.24);
-    c.fillStyle = 'rgba(10,8,6,0.75)'; c.fillRect(L - 4, Tp - 4, bw + 52, 52);
-    c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(L - 3.5, Tp - 3.5, bw + 51, 51);
-    c.fillStyle = '#2a1a10'; c.beginPath(); c.arc(L + 18, Tp + 22, 18, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#c8a060'; c.lineWidth = 2; c.stroke();
-    ui.text(`${h.clvl}`, L + 18, Tp + 23, { align: 'center', size: 16, bold: true, color: '#e8c040' });
-    const OD = 44, lf = h.hp / Math.max(1, d.maxHp), mf = d.maxMana ? h.mana / d.maxMana : 0;
-    orb(c, 'ui/orb-life', L + 40, Tp, OD, lf, g.manaShield ? '#8050c0' : '#a01010');
-    orb(c, 'ui/orb-mana', L + 40 + OD + 2, Tp, OD, mf, '#2040c0');
-    const tx = L + 40 + OD * 2 + 8, tw = Math.max(30, L + bw + 46 - tx);
-    ui.text(`${Math.ceil(h.hp)}/${d.maxHp}`, tx, Tp + 8, { size: 11, bold: true, color: g.manaShield ? '#c8a0ff' : '#ff8070' });
-    ui.text(`${Math.floor(h.mana)}/${d.maxMana}`, tx, Tp + 23, { size: 11, bold: true, color: '#90a8ff' });
+    ironFrame(c, L - 4, Tp - 4, bw + 52, 52, { r: 8 });
+    const lr = socket(c, L + 18, Tp + 22, 17, { rim: 'gold', tint: '#3a1a10' });
+    void lr; hudText(c, `${h.clvl}`, L + 18, Tp + 23, { align: 'center', size: 15, color: '#f0c850' });
+    const OR = 19, lf = h.hp / Math.max(1, d.maxHp), mf = d.maxMana ? h.mana / d.maxMana : 0;
+    glassOrb(c, L + 61, Tp + 22, OR, lf, g.manaShield ? 'shield' : 'life', now);
+    glassOrb(c, L + 107, Tp + 22, OR, mf, 'mana', now + 1.7);
+    const tx = L + 40 + 44 * 2 + 10, tw = Math.max(30, L + bw + 40 - tx);
+    hudText(c, `${Math.ceil(h.hp)}/${d.maxHp}`, tx, Tp + 9, { size: 11, color: g.manaShield ? '#d0b0ff' : '#ff8a78' });
+    hudText(c, `${Math.floor(h.mana)}/${d.maxMana}`, tx, Tp + 24, { size: 11, color: '#9cb4ff' });
     const lo = EXP_LEVELS[h.clvl - 1] ?? 0, hi = EXP_LEVELS[h.clvl] ?? lo + 1, xf = h.clvl >= 50 ? 1 : (h.exp - lo) / (hi - lo);
-    c.fillStyle = '#1a0e08'; c.fillRect(tx, Tp + 35, tw, 6); c.fillStyle = '#c8a040'; c.fillRect(tx, Tp + 35, tw * Math.max(0, Math.min(1, xf)), 6);
-    c.strokeStyle = '#5a4a2a'; c.strokeRect(tx + 0.5, Tp + 35.5, tw - 1, 5);
+    xpBar(c, tx, Tp + 37, tw, xf);
     ui.area(L - 4, Tp - 4, bw + 52, 52, () => { this.left = this.left === 'char' ? 'none' : 'char'; });
-    if (h.statPts) { c.fillStyle = '#e8c040'; c.beginPath(); c.arc(L + 32, Tp + 6, 6, 0, Math.PI * 2); c.fill(); ui.text('+', L + 32, Tp + 7, { align: 'center', size: 11, bold: true, color: '#000' }); }
+    if (h.statPts) { socket(c, L + 32, Tp + 6, 7, { rim: 'gold', tint: '#c89a30' }); hudText(c, '+', L + 32, Tp + 6.5, { align: 'center', size: 11, color: '#fff4d0' }); }
     // --- minimap (top-right, tap = full automap) + icon buttons ---
     const mw = 132, mh = 88, mx = R - mw, my = Tp - 4;
     this.drawMinimap(ui, mx, my, mw, mh);
+    c.save(); c.strokeStyle = '#3a3630'; c.lineWidth = 3; c.beginPath(); c.roundRect(mx - 1, my - 1, mw + 2, mh + 2, 4); c.stroke(); c.strokeStyle = 'rgba(200,160,80,0.6)'; c.lineWidth = 1; c.beginPath(); c.roundRect(mx + 1.5, my + 1.5, mw - 3, mh - 3, 3); c.stroke(); c.restore();
     ui.area(mx, my, mw, mh, () => { this.map = !this.map; });
     const icons: [string, boolean, () => void][] = [
       ['inv', this.right === 'inv', () => { this.right = this.right === 'inv' ? 'none' : 'inv'; }],
@@ -208,8 +211,8 @@ export class Hud {
     const isz = 38;
     icons.forEach(([k, on, fn], i) => {
       const x = mx - 8 - (icons.length - i) * (isz + 6), y = my;
-      c.fillStyle = on ? 'rgba(90,70,40,0.9)' : 'rgba(20,16,10,0.8)'; c.fillRect(x, y, isz, isz);
-      c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, isz - 1, isz - 1);
+      ironFrame(c, x, y, isz, isz, { r: 7, rivets: false });
+      if (on || this.isDown(x - 3, y - 3, isz + 6, isz + 6)) { c.save(); c.shadowColor = 'rgba(255,170,70,0.9)'; c.shadowBlur = 10; c.strokeStyle = 'rgba(240,190,90,0.9)'; c.lineWidth = 1.5; c.beginPath(); c.roundRect(x + 2, y + 2, isz - 4, isz - 4, 5); c.stroke(); c.restore(); }
       drawGlyph(c, k, x + isz / 2, y + isz / 2);
       ui.area(x - 3, y - 3, isz + 6, isz + 6, fn);
     });
@@ -221,61 +224,56 @@ export class Hud {
       ui.text(g.msg, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
       if (g.msgSub) ui.text(g.msgSub, W / 2, Tp + 94, { align: 'center', size: 12, color: '#a8c8ff' }); // U7: the plain-English effect
     } else if (g.pendingPick) ui.text(`Tap an item to ${g.pendingPick}`, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
-    // --- joystick ---
+    // --- joystick (UI sample): translucent rune ring + gripped thumb ---
     const j = this.joy;
     const jo = j ?? { ox: L + 86, oy: H - inset.b - 90, tx: L + 86, ty: H - inset.b - 90 };
-    c.globalAlpha = j ? 0.75 : 0.28;
-    c.strokeStyle = '#c8a060'; c.lineWidth = 2; c.beginPath(); c.arc(jo.ox, jo.oy, JOY_RADIUS, 0, Math.PI * 2); c.stroke();
-    c.fillStyle = 'rgba(40,30,20,0.5)'; c.fill();
     const k = knob(jo.ox, jo.oy, jo.tx, jo.ty);
-    c.fillStyle = '#8a6a3a'; c.beginPath(); c.arc(k.x, k.y, 24, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#e8c890'; c.stroke();
-    c.globalAlpha = 1;
-    // --- action cluster (bottom-right) ---
+    runeJoystick(c, jo.ox, jo.oy, JOY_RADIUS, k.x, k.y, !!j, now);
+    // --- action cluster (bottom-right): metal-rimmed sockets, inner bevel, pressed = scale + glow, cooldown sweep ---
     if (this.right !== 'none') return; // the right panel covers it
     const A = actionLayout(W, H, inset);
     const busy = g.p.state === 'attack' || g.p.state === 'cast' ? Math.max(0, g.p.t / Math.max(0.01, g.actTotal)) : 0;
-    const circle = (x: number, y: number, r: number, fill: string, edge: string) => {
-      c.fillStyle = fill; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.strokeStyle = edge; c.lineWidth = 2; c.stroke();
-    };
-    const sweep = (x: number, y: number, r: number, f: number, col = 'rgba(0,0,0,0.6)') => {
-      if (f <= 0) return; c.fillStyle = col; c.beginPath(); c.moveTo(x, y); c.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * f); c.closePath(); c.fill();
-    };
+    const down = (x: number, y: number, r: number) => this.isDown(x - r - 4, y - r - 4, r * 2 + 8, r * 2 + 8);
     // ATTACK
     const a = A.atk;
-    circle(a.x, a.y, a.r, this.attackDown ? '#7a2a1a' : '#4a1a10', '#d8a050');
-    drawGlyph(c, d.bow ? 'bow' : 'sword', a.x, a.y - 4, 1.6);
-    ui.text('ATTACK', a.x, a.y + 26, { align: 'center', size: 10, bold: true, color: '#e8d8a8' });
+    const ar = socket(c, a.x, a.y, a.r, { rim: 'gold', tint: '#5a1610', pressed: this.attackDown, glow: 'rgba(255,90,40,0.95)' });
+    const as = this.attackDown ? 0.94 : 1;
+    drawGlyph(c, d.bow ? 'bow' : 'sword', a.x, a.y - 4 * as, 1.6 * as);
+    hudText(c, 'ATTACK', a.x, a.y + 24 * as, { align: 'center', size: 9.5, color: '#f0dca8' });
+    sweep(c, a.x, a.y, ar, busy, 'rgba(0,0,0,0.35)');
     ui.press(a.x - a.r - 6, a.y - a.r - 6, a.r * 2 + 12, a.r * 2 + 12, () => { this.attackDown = true; g.attackHeld = true; }, () => { this.attackDown = false; g.attackHeld = false; });
     // class skill
     const sk = A.skill, skl = { warrior: 'Repair', rogue: 'Disarm', sorcerer: 'Recharge' }[h.cls];
-    circle(sk.x, sk.y, sk.r, '#2a2418', '#8a7a52'); drawGlyph(c, h.cls === 'warrior' ? 'hammer' : h.cls === 'rogue' ? 'trap' : 'staff', sk.x, sk.y - 3);
-    ui.text(skl, sk.x, sk.y + 15, { align: 'center', size: 8, color: '#d8c89a' });
+    const skd = down(sk.x, sk.y, sk.r), skr = socket(c, sk.x, sk.y, sk.r, { tint: '#3a2e1c', pressed: skd });
+    drawGlyph(c, h.cls === 'warrior' ? 'hammer' : h.cls === 'rogue' ? 'trap' : 'staff', sk.x, sk.y - 3);
+    hudText(c, skl, sk.x, sk.y + 14, { align: 'center', size: 7, color: '#e0d0a0' });
     ui.area(sk.x - sk.r - 4, sk.y - sk.r - 4, sk.r * 2 + 8, sk.r * 2 + 8, () => { g.classSkill(); });
     // spell slots
     h.slots.slice(0, SLOT_COUNT).forEach((id, i) => {
-      const s = A.slots[i];
-      circle(s.x, s.y, s.r, '#1a1a2a', id ? '#8a8ad0' : '#4a4232');
-      if (!id) { ui.text('+', s.x, s.y + 1, { align: 'center', size: 18, color: '#6a6050' }); ui.area(s.x - s.r - 4, s.y - s.r - 4, s.r * 2 + 8, s.r * 2 + 8, () => { this.right = 'spell'; }); return; }
+      const s = A.slots[i], sd = down(s.x, s.y, s.r);
+      if (!id) { socket(c, s.x, s.y, s.r, { tint: '#1a1816', dim: true, pressed: sd }); hudText(c, '+', s.x, s.y + 1, { align: 'center', size: 16, color: '#8a7a5a' }); ui.area(s.x - s.r - 4, s.y - s.r - 4, s.r * 2 + 8, s.r * 2 + 8, () => { this.right = 'spell'; }); return; }
       const src = g.spellSource(id), sp = SPELLS[src?.spell ?? id.replace(/^(scroll|staff):/, '')];
+      const tint = sp?.type === 'fire' ? '#4a200c' : sp?.type === 'lightning' ? '#142a4a' : '#24183e';
+      const ri = socket(c, s.x, s.y, s.r, { tint, pressed: sd, glow: sp?.type === 'fire' ? 'rgba(255,130,40,0.95)' : 'rgba(120,170,255,0.95)' });
       drawGlyph(c, `sp_${sp?.type ?? 'magic'}`, s.x, s.y - 4);
-      ui.text(shortName(sp?.name ?? id), s.x, s.y + 13, { align: 'center', size: 8, color: '#e8e8ff' });
-      let blocked = !src;
-      if (src?.from === 'spell' && sp) { const cost = spellMana(sp, Math.max(1, h.spells[sp.id] ?? 1)); if (h.mana < cost) { blocked = true; sweep(s.x, s.y, s.r, 1, 'rgba(20,40,160,0.55)'); } }
-      if (src?.from === 'staff') ui.text(`${src.item!.charges}`, s.x + s.r - 4, s.y - s.r + 6, { align: 'center', size: 10, bold: true, color: '#e8c040' });
-      if (id.startsWith('scroll:')) { const n = [...h.belt, ...h.inv.map((e) => e.item)].filter((it) => it && it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell]?.id === id.slice(7)).length; ui.text(`${n}`, s.x + s.r - 4, s.y - s.r + 6, { align: 'center', size: 10, bold: true, color: '#e8c040' }); }
-      if (!src) sweep(s.x, s.y, s.r, 1, 'rgba(0,0,0,0.65)');
-      sweep(s.x, s.y, s.r, busy);
-      void blocked;
+      hudText(c, shortName(sp?.name ?? id), s.x, s.y + 12, { align: 'center', size: 7, color: '#eeeaff' });
+      if (src?.from === 'spell' && sp) { const cost = spellMana(sp, Math.max(1, h.spells[sp.id] ?? 1)); if (h.mana < cost) sweep(c, s.x, s.y, ri, 1, 'rgba(20,40,160,0.55)'); }
+      const badge = (n: number) => { socket(c, s.x + s.r - 4, s.y - s.r + 5, 7, { rim: 'gold', tint: '#2a1e0c' }); hudText(c, `${n}`, s.x + s.r - 4, s.y - s.r + 5.5, { align: 'center', size: 8, color: '#f0c850' }); };
+      if (src?.from === 'staff') badge(src.item!.charges);
+      if (id.startsWith('scroll:')) badge([...h.belt, ...h.inv.map((e) => e.item)].filter((it) => it && it.misc.startsWith('IMISC_SCROLL') && SPELL_BY_D1[it.spell]?.id === id.slice(7)).length);
+      if (!src) sweep(c, s.x, s.y, ri, 1, 'rgba(0,0,0,0.65)');
+      sweep(c, s.x, s.y, ri, busy);
       ui.area(s.x - s.r - 4, s.y - s.r - 4, s.r * 2 + 8, s.r * 2 + 8, () => g.castSlot(i), () => { this.right = 'spell'; this.spellSel = id; });
     });
-    sweep(sk.x, sk.y, sk.r, busy);
-    // potions (from the belt)
+    sweep(c, sk.x, sk.y, skr, busy);
+    // potions (from the belt): framed belt sockets
     const pot = (P: { x: number; y: number; r: number }, life: boolean) => {
       const want = life ? ['IMISC_HEAL', 'IMISC_FULLHEAL', 'IMISC_REJUV', 'IMISC_FULLREJUV'] : ['IMISC_MANA', 'IMISC_FULLMANA', 'IMISC_REJUV', 'IMISC_FULLREJUV'];
       const n = h.belt.filter((b) => b && want.includes(b.misc)).length;
-      circle(P.x, P.y, P.r, n ? (life ? '#5a1010' : '#10205a') : '#222', '#8a7a52');
-      drawGlyph(c, life ? 'pot_red' : 'pot_blue', P.x, P.y - 2);
-      ui.text(`${n}`, P.x + P.r - 3, P.y + P.r - 5, { align: 'center', size: 11, bold: true, color: '#fff' });
+      ironFrame(c, P.x - P.r - 2, P.y - P.r - 2, P.r * 2 + 4, P.r * 2 + 4, { r: 9, rivets: false });
+      socket(c, P.x, P.y, P.r - 3, { tint: n ? (life ? '#4a0c0c' : '#0c1a4a') : '#1a1a1a', dim: !n, pressed: down(P.x, P.y, P.r), glow: life ? 'rgba(255,70,50,0.9)' : 'rgba(90,130,255,0.9)' });
+      drawGlyph(c, life ? 'pot_red' : 'pot_blue', P.x, P.y - 1);
+      hudText(c, `${n}`, P.x + P.r - 4, P.y + P.r - 5, { align: 'center', size: 10, color: n ? '#fff4d0' : '#8a8070' });
       ui.area(P.x - P.r - 5, P.y - P.r - 5, P.r * 2 + 10, P.r * 2 + 10, () => this.quickPotion(life));
     };
     pot(A.hpPot, true); pot(A.mpPot, false);
@@ -283,11 +281,14 @@ export class Hud {
     const it = g.interaction();
     if (it) {
       const b = A.interact;
-      c.fillStyle = 'rgba(60,46,24,0.92)'; c.beginPath(); c.roundRect(b.x, b.y, b.w, b.h, 18); c.fill(); c.strokeStyle = '#e8c070'; c.lineWidth = 2; c.stroke();
-      ui.text(it.label.length > 22 ? it.label.slice(0, 21) + '...' : it.label, b.x + b.w / 2, b.y + b.h / 2 + 1, { align: 'center', size: 12, bold: true, color: '#fff0c8' });
+      ironFrame(c, b.x, b.y, b.w, b.h, { r: 18, rivets: false });
+      c.save(); c.strokeStyle = 'rgba(240,192,100,0.9)'; c.lineWidth = 1.5; c.beginPath(); c.roundRect(b.x + 3, b.y + 3, b.w - 6, b.h - 6, 15); c.stroke(); c.restore();
+      hudText(c, it.label.length > 22 ? it.label.slice(0, 21) + '...' : it.label, b.x + b.w / 2, b.y + b.h / 2 + 1, { align: 'center', size: 11, color: '#fff0c8' });
       ui.area(b.x - 4, b.y - 6, b.w + 8, b.h + 12, () => g.interact());
     }
   }
+  /** UI sample: is a finger currently down inside this css-px rect (for the pressed state)? */
+  isDown(x: number, y: number, w: number, h: number) { for (const f of this.fingers.values()) if (f.x >= x && f.y >= y && f.x < x + w && f.y < y + h) return true; return false; }
   drawMinimap(ui: UI, x: number, y: number, w: number, hh: number) {
     const g = this.g(), lv = g.level, m = lv.map, c = ui.c, s = 2.2, town = lv.id === 'town';
     c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(x, y, w, hh); c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, hh - 1);
@@ -708,16 +709,6 @@ function pickUpPack(h: Game['hero'], it: Item): boolean {
 }
 function usable(it: Item) { return (it.misc !== 'IMISC_NONE' && it.misc !== 'IMISC_STAFF' && it.misc !== 'IMISC_UNIQUE' && it.loc === 'ILOC_UNEQUIPABLE') || it.misc === 'IMISC_BOOK'; }
 function shortName(s: string) { const w = s.replace(/^(Scroll|Staff) /, '').split(' '); return (w.length > 1 ? w.map((x) => x[0]).join('') : w[0]).slice(0, 8); }
-/** Life/mana orb: the CC0 empty orb, then the full orb clipped to the fill level (D1 fills from the bottom). */
-function orb(c: CanvasRenderingContext2D, key: string, x: number, y: number, d: number, f: number, col: string) {
-  f = Math.max(0, Math.min(1, f));
-  if (drawImg(c, 'ui/orb-empty', x, y, d, d)) {
-    c.save(); c.beginPath(); c.rect(x, y + d * (1 - f), d, d * f); c.clip(); drawImg(c, key, x, y, d, d); c.restore();
-    return;
-  }
-  c.fillStyle = '#1a0e08'; c.beginPath(); c.arc(x + d / 2, y + d / 2, d / 2, 0, Math.PI * 2); c.fill();
-  c.save(); c.clip(); c.fillStyle = col; c.fillRect(x, y + d * (1 - f), d, d * f); c.restore();
-}
 function spellGlyph(id: string) { return /fire|inferno|flame|elemental/.test(id) ? 'sp_fire' : /bolt|light|chain|nova/.test(id) && id !== 'firebolt' ? 'sp_lightning' : 'spell'; }
 /** Small vector icons for the HUD (no icon font needed). */
 export function drawGlyph(c: CanvasRenderingContext2D, k: string, x: number, y: number, s = 1) {

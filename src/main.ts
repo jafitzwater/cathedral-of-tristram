@@ -18,6 +18,8 @@ import creditsText from '../CREDITS.md?raw';
 import { NAME_BOX, NAME_CANCEL, NAME_OK, cssRect, frontLayout, inputFontPx, isFormTarget } from './nameEntry';
 import { CLASSES } from './data/classes';
 
+// UI sample: the OFL Cinzel face for the HUD lettering, bundled locally (16 KB Latin subset); canvas falls back to serif until it loads.
+try { const f = new FontFace('Cinzel', `url(${import.meta.env.BASE_URL}fonts/cinzel-latin.woff2)`, { weight: '400 900' }); document.fonts.add(f); f.load().catch(() => {}); } catch { /* no FontFace API */ }
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const nameInput = document.getElementById('name') as HTMLInputElement;
 const nameForm = document.getElementById('nameForm') as HTMLFormElement;
@@ -129,6 +131,7 @@ canvas.addEventListener('pointerdown', (e) => {
     ptr.kind = 'joy'; hud.joy = { ox: p.x, oy: p.y, tx: p.x, ty: p.y }; game.move = { x: 0, y: 0, mag: 0 };
   } else if (!b && screen === 'game') ptr.kind = 'world';
   if (ptr.kind === 'box' && b?.hold) ptr.timer = window.setTimeout(() => { if (ptr.moved) return; ptr.held = true; b.hold!(); buzz(10); }, HOLD_MS);
+  if (ptr.kind === 'box' || ptr.kind === 'press') hud.fingers.set(e.pointerId, { x: p.x, y: p.y });
   ptrs.set(e.pointerId, ptr);
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -145,7 +148,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const end = (e: PointerEvent, cancel: boolean) => {
   const ptr = ptrs.get(e.pointerId); if (!ptr) return;
-  ptrs.delete(e.pointerId); clearTimeout(ptr.timer);
+  ptrs.delete(e.pointerId); clearTimeout(ptr.timer); hud.fingers.delete(e.pointerId);
   const p = css(e);
   if (ptr.kind === 'joy') { if (game) game.move = null; hud.joy = null; return; }
   if (ptr.kind === 'press') { ptr.box?.up?.(); return; }

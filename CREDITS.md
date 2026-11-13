@@ -13,6 +13,8 @@ It ships **no Blizzard files**: no MPQ data, sprites, sounds, music or game text
 - art/npcs-cow-town.png: the Tristram cows, rendered from the Quaternius "Farm Animal Pack" Cow (June 2018), https://quaternius.com/packs/farmanimal.html (CC0 1.0), 8 facings, idle head/tail loop.
 - art/items-items.png: inventory icons painted by the Project Tristram sprite director (CC0 1.0)
 - art/ui-*.png: life/mana orbs, belt slot and the inventory, character and spellbook panel frames (empty; values are drawn live by the game) by the Project Tristram sprite director, orb bezels and carved frames from itsmars "Health Orb 1.1", https://opengameart.org/content/health-orb-11 (CC0 1.0). The art pack's 640x128 bottom panel is not shipped (the Order 4 touch HUD replaces it).
+- fonts/cinzel-latin.woff2: Cinzel by Natanael Gama / The Cinzel Project Authors (https://github.com/NDISCOVER/Cinzel), SIL Open Font License 1.1 (licence shipped as fonts/Cinzel-OFL.txt). Latin subset (16 KB) used for the HUD lettering.
+- HUD skin (UI sample: stone/iron frames, glass orbs, metal sockets, cooldown sweep, rune-ring joystick, rune glyphs, stone noise): self-made, drawn with Canvas 2D in src/hudSkin.ts. No image files.
 - No CC-BY packs, Mixamo, Spriters Resource rips or MPQ extracts are used. Attribution is not required under CC0; it is given gladly.
 
 ## Missing art (code-drawn for now)
