@@ -7,6 +7,7 @@ import { T, WALKABLE, at } from '../src/levels/types';
 import { tileToScreen } from '../src/iso';
 import { findPath } from '../src/path';
 import { ROOFED, BASE_FADE, ROOF_FADE, behind, buildingFade, frontS, sortKey, spriteRect, type SpriteBox } from '../src/townArt';
+import { BANK_DEPTH, waterFrame, waterMask } from '../src/render';
 import { groupsMiB, wantedGroups, BUDGET_MIB, type ArtManifest } from '../src/art';
 import { Game } from '../src/game';
 import { loadGame, saveGame } from '../src/save';
@@ -252,5 +253,27 @@ const town: Record<string, number> = {};
 for (const cls of ['warrior', 'rogue', 'sorcerer']) {
   town[cls] = groupsMiB(man, wantedGroups('town', cls));
   assert.ok(town[cls] <= BUDGET_MIB, `${cls} town ${town[cls]}`);
+}
+// ---- Order 11c: the fixed stream water / bank frames and the banks on both streams ----
+{
+  const fl = man.assets.find((a) => a.key === 'tiles/town-floors')!;
+  const png = fs.readFileSync(`public/art/${fl.file}`), ph = png.readUInt32BE(20);
+  assert.equal(ph, fl.h, 'manifest height = PNG height');
+  for (const id of ['town_water_00', 'town_water_01', 'town_water_02', 'town_water_03', 'town_water_bank_n', 'town_water_bank_e', 'town_water_bank_s', 'town_water_bank_w']) {
+    const f = fl.frames!.find((q) => q.id === id); assert.ok(f, `${id} in the atlas`);
+    assert.ok(f.w === 64 && f.h === 32 && f.y + f.h <= ph && f.x + f.w <= fl.w, `${id} is a whole 64x32 diamond inside the atlas`);
+  }
+  const wm = makeTown(); let open = 0;
+  for (const [name, st] of [['west', WEST_STREAM], ['east', EAST_STREAM]] as const) {
+    let nw = 0, se = 0;
+    for (let y = 4; y < wm.h - 4; y++) {
+      const x0 = Math.floor(streamX(st, y)); if (x0 < 1 || x0 > wm.w - 3) continue;
+      for (let x = x0 - 1; x <= x0 + 2; x++) if (at(wm, x, y) === T.WATER) { const k = waterMask(wm, x, y); if (k & 1) nw++; if (k & 4) se++; if (!k) open++; assert.notEqual(k, 15, 'no water tile walled in on all sides'); }
+    }
+    assert.ok(nw > 20 && se > 20, `${name} stream has banks on both sides (${nw}/${se})`);
+  }
+  assert.ok(open > 0, 'some open water between the banks');
+  const fr = new Set([0, 0.22, 0.44, 0.66].map((t) => waterFrame(10, 10, t))); assert.equal(fr.size, 4, 'water loops through 4 frames');
+  assert.ok(BANK_DEPTH > 0.2 && BANK_DEPTH < 0.5, 'banks leave open water in the 2-wide streams');
 }
 console.log(`town: OK (96x96, ${BUILDINGS.length} pieces, ${water} water, ${bridges} bridge tiles; joystick reached ${stickLog.join(', ')}; portal round trip exact; town MiB ${Object.entries(town).map(([k, v]) => `${k} ${v.toFixed(3)}`).join(', ')})`);

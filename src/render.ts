@@ -125,7 +125,11 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
         if (!groundDone) groundTile(c, m, town, t, x, y, sx, sy, seen);
         if (!town && (t === T.UP || t === T.DOWN)) drawFrame(c, t === T.UP ? 'stairs_s' : 'stairsAged_s', sx, sy + TILE_H - 2);
         if (t === T.UP || t === T.DOWN) { c.fillStyle = `rgba(255,230,160,${0.6 * seen})`; c.font = '10px serif'; c.textAlign = 'center'; c.fillText(t === T.UP ? 'UP' : 'DOWN', sx, sy + 20); }
-        if (t === T.WATER) { c.fillStyle = 'rgba(120,160,255,0.15)'; c.fillRect(sx - 6 + Math.sin(time + x) * 6, sy + 14, 12, 2); }
+        if (t === T.WATER) {
+          // Order 11c: the stream water is the 4-frame loop with the bank strips on top (drawn live; the cache holds frame 00 under it)
+          if (town && hasFrame('town_water_00')) waterTile(c, m, x, y, sx, sy, time);
+          else { c.fillStyle = 'rgba(120,160,255,0.15)'; c.fillRect(sx - 6 + Math.sin(time + x) * 6, sy + 14, 12, 2); }
+        }
         const arch = wd?.[y * m.w + x]?.arch;
         if (arch) { c.globalAlpha = wallFade(x, y, g.p.x, g.p.y, hroom) * wseen; stack(`stoneWallArchway_${arch}`, sx, sy, plainAbove(arch)); c.globalAlpha = 1; }
       }
@@ -229,6 +233,7 @@ function townGround(c: CanvasRenderingContext2D, m: Game['level']['map'], cam: P
       const gt = t === T.TREE ? (ring || inBrush(x, y) ? T.TREE : T.GRASS) : t === T.HOUSE || t === T.WALL ? T.GRASS : t;
       if (t === T.WALL && !hasFrame('stone_wall_full')) continue; // the wall prisms cover their tile
       if (TALL.has(t) || t === T.HOUSE || t === T.WALL) ok = floorArt(g2, true, gt, x, y, p.x, p.y, ring ? 0.45 : 1) && ok;
+      else if (t === T.WATER && hasFrame('town_water_00')) drawFrame(g2, 'town_water_00', p.x, p.y + TILE_H - 1);
       else groundTile(g2, m, true, t, x, y, p.x, p.y, 1);
     }
     // deep brush that no walkable tile stands behind is baked in too, in diagonal order (it can never cover the hero wrongly)
@@ -245,6 +250,52 @@ function townGround(c: CanvasRenderingContext2D, m: Game['level']['map'], cam: P
   c.drawImage(ground.cv, Math.round((ground.x0 + cam.x) * k), Math.round((ground.y0 + cam.y) * k));
   c.restore();
   return true;
+}
+/** Order 11c: which edges of a stream tile face dry land (bit 1 = NW / x-1, 2 = NE / y-1, 4 = SE / x+1, 8 = SW / y+1).
+ *  Bridges and the map edge count as water. */
+export function waterMask(m: Game['level']['map'], x: number, y: number): number {
+  const dry = (xx: number, yy: number) => { if (xx < 0 || yy < 0 || xx >= m.w || yy >= m.h) return false; const t = m.tiles[yy * m.w + xx]; return t !== T.WATER && t !== T.BRIDGE; };
+  return (dry(x - 1, y) ? 1 : 0) | (dry(x, y - 1) ? 2 : 0) | (dry(x + 1, y) ? 4 : 0) | (dry(x, y + 1) ? 8 : 0);
+}
+export const WATER_MS = 220;
+/** The animated water frame for a tile: one 4-frame loop, phased along the stream so the water seems to flow. */
+export function waterFrame(x: number, y: number, time: number) { return `town_water_0${(Math.floor((time * 1000) / WATER_MS) - ((x + y) >> 1) + 4000) % 4}`; }
+/** Share of the tile, from a dry edge inward, that the bank covers. */
+export const BANK_DEPTH = 0.38;
+const BANK_K = 2; // overlay resolution (backing px per world px)
+const bankCache = new Map<number, HTMLCanvasElement | null>();
+/** Bank overlay for a mask: the earth of the 11b bank tiles (top half of bank_n + bottom half of bank_s = a full earth
+ *  diamond), clipped to a strip along each dry edge, with a dark lip and a faint foam line on the waterline. The bank tiles
+ *  split the diamond through its corners, while the 2-wide streams mostly touch land on one tile edge, so the strips are
+ *  cut along the edges instead. Built once per mask (64x32 at 2x, ~32 KB each). */
+function bankOverlay(mask: number): HTMLCanvasElement | null {
+  if (bankCache.has(mask)) return bankCache.get(mask)!;
+  if (!hasFrame('town_water_bank_n') || !hasFrame('town_water_bank_s') || typeof document === 'undefined') return null;
+  const cv = document.createElement('canvas'); cv.width = 64 * BANK_K; cv.height = 32 * BANK_K;
+  const x = cv.getContext('2d'); if (!x) { bankCache.set(mask, null); return null; }
+  x.scale(BANK_K, BANK_K);
+  const L = [0, 16], Tp = [32, 0], R = [64, 16], B = [32, 32], f = BANK_DEPTH;
+  const edges: [number[], number[], number[]][] = [[L, Tp, [32, 16]], [Tp, R, [-32, 16]], [R, B, [-32, -16]], [B, L, [32, -16]]];
+  const strip = () => { x.beginPath(); edges.forEach(([p, q, d], i) => { if (!(mask & (1 << i))) return; x.moveTo(p[0], p[1]); x.lineTo(q[0], q[1]); x.lineTo(q[0] + d[0] * f, q[1] + d[1] * f); x.lineTo(p[0] + d[0] * f, p[1] + d[1] * f); x.closePath(); }); };
+  x.save(); strip(); x.clip();
+  x.save(); x.beginPath(); x.rect(0, 0, 64, 16); x.clip(); drawFrame(x, 'town_water_bank_n', 32, 31); x.restore();
+  x.save(); x.beginPath(); x.rect(0, 16, 64, 16); x.clip(); drawFrame(x, 'town_water_bank_s', 32, 31); x.restore();
+  x.restore();
+  // waterline: dark wet lip, then a faint foam line just off the bank (clipped to the diamond)
+  x.save(); x.beginPath(); x.moveTo(L[0], L[1]); x.lineTo(Tp[0], Tp[1]); x.lineTo(R[0], R[1]); x.lineTo(B[0], B[1]); x.closePath(); x.clip();
+  edges.forEach(([p, q, d], i) => {
+    if (!(mask & (1 << i))) return;
+    const line = (k: number, col: string, w: number) => { x.strokeStyle = col; x.lineWidth = w; x.beginPath(); x.moveTo(p[0] + d[0] * k - (q[0] - p[0]) * 0.02, p[1] + d[1] * k - (q[1] - p[1]) * 0.02); x.lineTo(q[0] + d[0] * k + (q[0] - p[0]) * 0.02, q[1] + d[1] * k + (q[1] - p[1]) * 0.02); x.stroke(); };
+    line(f - 0.02, 'rgba(10,8,4,0.55)', 1.4); line(f + 0.05, 'rgba(190,210,230,0.16)', 0.8);
+  });
+  x.restore();
+  bankCache.set(mask, cv); return cv;
+}
+/** One stream tile: the animated water frame, then the bank strips. */
+function waterTile(c: CanvasRenderingContext2D, m: Game['level']['map'], x: number, y: number, sx: number, sy: number, time: number) {
+  drawFrame(c, waterFrame(x, y, time), sx, sy + TILE_H - 1);
+  const mk = waterMask(m, x, y), ov = mk ? bankOverlay(mk) : null;
+  if (ov) c.drawImage(ov, Math.round(sx - 32), Math.round(sy), 64, 32);
 }
 const BRUSH = ['bush01', 'bush02', 'bush04', 'bush05', 'shrub1-01', 'shrub1-02', 'shrub1-03', 'shrub1-04', 'pine-none01', 'pine-none02', 'pine-none03'];
 const hash = (x: number, y: number) => ((x * 73856093) ^ (y * 19349663)) >>> 0;
