@@ -3,6 +3,8 @@
 // pressed state (scale + glow), a cooldown sweep, and a translucent rune-ring joystick with a gripped thumb.
 // Everything is drawn with Canvas 2D (no image assets); the only file is the OFL Cinzel font (public/fonts).
 export const HUD_FONT = '"Cinzel", "Times New Roman", serif';
+/** Readable body face (OFL IM Fell English, local subset) for descriptions, dialogue and item lines. */
+export const BODY_FONT = '"IM Fell English", Georgia, "Times New Roman", serif';
 const TAU = Math.PI * 2;
 let stoneTex: CanvasPattern | null | undefined;
 /** 64x64 stone noise tile, built once (self-made, ~16 KB in memory). */
@@ -19,7 +21,7 @@ function stone(c: CanvasRenderingContext2D): CanvasPattern | null {
 }
 function rrect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) { c.beginPath(); c.roundRect(x, y, w, h, r); }
 /** Carved-stone plate in a wrought-iron border with a thin gold inner line and corner rivets. */
-export function ironFrame(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, o: { r?: number; alpha?: number; rivets?: boolean } = {}) {
+function ironFrameRaw(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, o: { r?: number; alpha?: number; rivets?: boolean } = {}) {
   const r = o.r ?? 6; c.save(); c.globalAlpha *= o.alpha ?? 1;
   c.shadowColor = 'rgba(0,0,0,0.7)'; c.shadowBlur = 6; c.shadowOffsetY = 2;
   rrect(c, x, y, w, h, r); c.fillStyle = '#16120d'; c.fill(); c.shadowColor = 'transparent';
@@ -83,6 +85,12 @@ export function xpBar(c: CanvasRenderingContext2D, x: number, y: number, w: numb
 export interface SocketOpts { pressed?: boolean; rim?: 'iron' | 'gold'; tint?: string; glow?: string; dim?: boolean }
 /** Round metal-rimmed socket with an inner bevel. Pressed: scaled to 94 % with a glow. Returns the drawn radius. */
 export function socket(c: CanvasRenderingContext2D, x: number, y: number, r: number, o: SocketOpts = {}): number {
+  const rr = o.pressed ? r * 0.94 : r, ri = rr - Math.max(3, rr * 0.12);
+  const key = `sock|${r}|${o.rim ?? 'iron'}|${o.tint ?? ''}|${o.pressed ? 1 : 0}|${o.glow ?? ''}|${o.dim ? 1 : 0}`;
+  cached(c, key, x - r, y - r, 2 * r, 2 * r, 14, (g) => socketRaw(g, r, r, r, o));
+  return ri;
+}
+function socketRaw(c: CanvasRenderingContext2D, x: number, y: number, r: number, o: SocketOpts = {}): number {
   const rr = o.pressed ? r * 0.94 : r; c.save();
   if (o.pressed) { c.shadowColor = o.glow ?? 'rgba(255,150,60,0.9)'; c.shadowBlur = 16; }
   else { c.shadowColor = 'rgba(0,0,0,0.75)'; c.shadowBlur = 6; c.shadowOffsetY = 2; }
@@ -172,3 +180,117 @@ function shade(hex: string, k: number): string {
   const n = parseInt(hex.slice(1), 16), f = (v: number) => Math.max(0, Math.min(255, Math.round(v * k)));
   return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Order 16 (staging): cached sprites, the menu skin (panels, wells, rarity slots, buttons, tooltips) on the same look.
+// ---------------------------------------------------------------------------------------------------------------------
+const sprites = new Map<string, HTMLCanvasElement>();
+let cacheHits = 0, cacheMiss = 0;
+export const skinCache = { get size() { return sprites.size; }, get hits() { return cacheHits; }, get misses() { return cacheMiss; } };
+/** Draw a static graphic through a bitmap cache keyed by (key, size, device scale); blitted on whole device pixels. */
+export function cached(c: CanvasRenderingContext2D, key: string, x: number, y: number, w: number, h: number, pad: number, draw: (g: CanvasRenderingContext2D) => void) {
+  const m = c.getTransform(), k = Math.round(Math.hypot(m.a, m.b) * 100) / 100;
+  if (typeof document === 'undefined' || k <= 0) { c.save(); c.translate(x, y); draw(c); c.restore(); return; }
+  const id = `${key}|${w}|${h}|${k}`;
+  let cv = sprites.get(id);
+  if (!cv) {
+    cacheMiss++;
+    cv = document.createElement('canvas'); cv.width = Math.ceil((w + 2 * pad) * k); cv.height = Math.ceil((h + 2 * pad) * k);
+    const g = cv.getContext('2d')!; g.scale(k, k); g.translate(pad, pad); draw(g);
+    sprites.set(id, cv); if (sprites.size > 220) sprites.delete(sprites.keys().next().value!);
+  } else cacheHits++;
+  const dx = Math.round(m.a * (x - pad) + m.e), dy = Math.round(m.d * (y - pad) + m.f);
+  c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.drawImage(cv, dx, dy); c.restore();
+}
+/** Carved-stone plate in a wrought-iron border (cached unless it is panel-sized). */
+export function ironFrame(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, o: { r?: number; alpha?: number; rivets?: boolean } = {}) {
+  if (w * h > 30000 || o.alpha !== undefined) { ironFrameRaw(c, x, y, w, h, o); return; }
+  cached(c, `iron|${o.r ?? 6}|${o.rivets === false ? 0 : 1}`, x, y, w, h, 8, (g) => ironFrameRaw(g, 0, 0, w, h, o));
+}
+const GOLD = '#d8b058', GOLD_HI = '#f4d690', BLOOD = '#8a1a10';
+/** Menu panel: iron border, dark leather-and-stone field, gold inner trim, gold corner brackets, optional title plaque. */
+export function skinPanel(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, title?: string) {
+  c.save();
+  ironFrameRaw(c, x, y, w, h, { r: 7 });
+  // leather warmth over the stone
+  const lg = c.createRadialGradient(x + w / 2, y + h * 0.4, 10, x + w / 2, y + h / 2, Math.max(w, h) * 0.75);
+  lg.addColorStop(0, 'rgba(70,40,22,0.35)'); lg.addColorStop(1, 'rgba(0,0,0,0.35)');
+  c.fillStyle = lg; c.beginPath(); c.roundRect(x + 5, y + 5, w - 10, h - 10, 4); c.fill();
+  // gold corner brackets
+  c.strokeStyle = GOLD; c.lineWidth = 1.4; c.lineCap = 'square';
+  const b = 14;
+  for (const [cx, cy, sx, sy] of [[x + 8, y + 8, 1, 1], [x + w - 8, y + 8, -1, 1], [x + 8, y + h - 8, 1, -1], [x + w - 8, y + h - 8, -1, -1]]) {
+    c.beginPath(); c.moveTo(cx, cy + sy * b); c.lineTo(cx, cy); c.lineTo(cx + sx * b, cy); c.stroke();
+    c.fillStyle = GOLD_HI; c.beginPath(); c.arc(cx + sx * 3.5, cy + sy * 3.5, 1.3, 0, TAU); c.fill();
+  }
+  if (title) titleBar(c, x + 10, y + 8, w - 20, title);
+  c.restore();
+}
+/** Title plaque: blood-red band between gold rules, Cinzel caps. */
+export function titleBar(c: CanvasRenderingContext2D, x: number, y: number, w: number, title: string, size = 13) {
+  const h = 22;
+  const g = c.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#4a0e08'); g.addColorStop(0.5, BLOOD); g.addColorStop(1, '#3a0a06');
+  c.fillStyle = g; c.fillRect(x + 6, y, w - 12, h);
+  c.strokeStyle = GOLD; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(x, y + 0.5); c.lineTo(x + w, y + 0.5); c.moveTo(x, y + h - 0.5); c.lineTo(x + w, y + h - 0.5); c.stroke();
+  for (const ex of [x, x + w]) { c.fillStyle = GOLD; c.beginPath(); c.moveTo(ex, y + h / 2 - 4); c.lineTo(ex + (ex === x ? 6 : -6), y + h / 2); c.lineTo(ex, y + h / 2 + 4); c.closePath(); c.fill(); }
+  hudText(c, title.toUpperCase(), x + w / 2, y + h / 2 + 1, { align: 'center', size, color: GOLD_HI });
+}
+/** Gold divider rule with a small lozenge in the middle. */
+export function divider(c: CanvasRenderingContext2D, x: number, y: number, w: number) {
+  const g = c.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, 'rgba(216,176,88,0)'); g.addColorStop(0.5, 'rgba(216,176,88,0.8)'); g.addColorStop(1, 'rgba(216,176,88,0)');
+  c.fillStyle = g; c.fillRect(x, y, w, 1);
+  c.fillStyle = GOLD; c.beginPath(); c.moveTo(x + w / 2, y - 3); c.lineTo(x + w / 2 + 4, y + 0.5); c.lineTo(x + w / 2, y + 4); c.lineTo(x + w / 2 - 4, y + 0.5); c.closePath(); c.fill();
+}
+/** Recessed stone well (value boxes, empty slots): dark inset with a bevel lip and a thin iron edge. */
+export function well(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, o: { border?: string; glow?: string; fill?: string } = {}) {
+  c.save();
+  c.fillStyle = o.fill ?? '#0b0907'; c.fillRect(x, y, w, h);
+  const ig = c.createLinearGradient(x, y, x, y + h); ig.addColorStop(0, 'rgba(0,0,0,0.7)'); ig.addColorStop(0.25, 'rgba(0,0,0,0)'); ig.addColorStop(1, 'rgba(120,96,60,0.12)');
+  c.fillStyle = ig; c.fillRect(x, y, w, h);
+  c.strokeStyle = 'rgba(0,0,0,0.9)'; c.lineWidth = 1; c.beginPath(); c.moveTo(x + 0.5, y + h - 0.5); c.lineTo(x + 0.5, y + 0.5); c.lineTo(x + w - 0.5, y + 0.5); c.stroke();
+  c.strokeStyle = 'rgba(170,140,90,0.35)'; c.beginPath(); c.moveTo(x + w - 0.5, y + 0.5); c.lineTo(x + w - 0.5, y + h - 0.5); c.lineTo(x + 0.5, y + h - 0.5); c.stroke();
+  if (o.border) { if (o.glow) { c.shadowColor = o.glow; c.shadowBlur = 6; } c.strokeStyle = o.border; c.lineWidth = 1.5; c.strokeRect(x + 1.25, y + 1.25, w - 2.5, h - 2.5); }
+  c.restore();
+}
+/** D1 rarity border colours: white normal, blue magic, gold unique; null = no item. */
+export function rarityColor(it: { magical: number; identified: boolean; itype: string } | null): string | null {
+  if (!it) return null;
+  return it.itype === 'ITYPE_GOLD' ? '#e8c040' : it.magical === 2 && it.identified ? '#d8a840' : it.magical ? '#6a8aff' : '#c8c8c0';
+}
+/** Item slot: a well with the item's rarity border (and a soft glow for magic and unique). */
+export function itemSlot(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, it: { magical: number; identified: boolean; itype: string } | null, o: { sel?: boolean; bad?: boolean } = {}) {
+  const col = rarityColor(it);
+  well(c, x, y, w, h, { border: o.sel ? '#f4d690' : col ?? undefined, glow: o.sel ? 'rgba(244,214,144,0.8)' : it && it.magical ? col ?? undefined : undefined, fill: o.bad ? '#2a0806' : undefined });
+}
+/** Iron button with a bevel and Cinzel label; on = gold-lit, pressed = sunk + glow, disabled = dim. */
+export function skinButton(c: CanvasRenderingContext2D, label: string, x: number, y: number, w: number, h: number, o: { on?: boolean; disabled?: boolean; pressed?: boolean; size?: number; danger?: boolean } = {}) {
+  const key = `btn|${o.on ? 1 : 0}|${o.disabled ? 1 : 0}|${o.pressed ? 1 : 0}|${o.danger ? 1 : 0}`;
+  cached(c, key, x, y, w, h, 8, (g) => {
+    const r = Math.min(6, h / 4);
+    if (o.pressed) { g.shadowColor = 'rgba(255,160,70,0.85)'; g.shadowBlur = 10; } else { g.shadowColor = 'rgba(0,0,0,0.7)'; g.shadowBlur = 4; g.shadowOffsetY = 1.5; }
+    const rim = g.createLinearGradient(0, 0, 0, h); rim.addColorStop(0, o.on ? GOLD_HI : '#8e887e'); rim.addColorStop(0.5, o.on ? '#8a6420' : '#3a3732'); rim.addColorStop(1, o.on ? '#c89a48' : '#5e5950');
+    g.fillStyle = rim; g.beginPath(); g.roundRect(0, 0, w, h, r); g.fill(); g.shadowColor = 'transparent';
+    const face = g.createLinearGradient(0, 2, 0, h - 2);
+    const top = o.danger ? '#5a1810' : o.on ? '#4a3418' : '#2e2a24', bot = o.danger ? '#2a0806' : o.on ? '#22160a' : '#14120f';
+    face.addColorStop(0, o.pressed ? bot : top); face.addColorStop(1, o.pressed ? top : bot);
+    g.fillStyle = face; g.beginPath(); g.roundRect(2, 2, w - 4, h - 4, Math.max(1, r - 2)); g.fill();
+    g.strokeStyle = 'rgba(255,235,190,0.12)'; g.lineWidth = 1; g.beginPath(); g.moveTo(4, 2.5); g.lineTo(w - 4, 2.5); g.stroke();
+    if (o.disabled) { g.fillStyle = 'rgba(0,0,0,0.45)'; g.beginPath(); g.roundRect(0, 0, w, h, r); g.fill(); }
+  });
+  const sz = o.size ?? Math.min(13, Math.max(9, h * 0.38));
+  hudText(c, label, x + w / 2, y + h / 2 + 1 + (o.pressed ? 0.5 : 0), { align: 'center', size: sz, color: o.disabled ? '#6a6050' : o.on ? '#fff0c0' : '#e8d8a8' });
+}
+/** Close button: a small iron socket with a blood-red well and a gold X. */
+export function closeButton(c: CanvasRenderingContext2D, x: number, y: number, pressed = false) {
+  cached(c, `close|${pressed ? 1 : 0}`, x, y, 30, 30, 10, (g) => {
+    socketRaw(g, 15, 15, 15, { rim: 'iron', tint: '#5a1610', pressed, glow: 'rgba(255,90,40,0.9)' });
+    g.strokeStyle = GOLD_HI; g.lineWidth = 2.4; g.lineCap = 'round'; g.beginPath(); g.moveTo(10, 10); g.lineTo(20, 20); g.moveTo(20, 10); g.lineTo(10, 20); g.stroke();
+  });
+}
+/** Up / down arrow drawn as a path (no glyph needed). */
+export function arrow(c: CanvasRenderingContext2D, x: number, y: number, up: boolean, col = GOLD_HI) {
+  c.fillStyle = col; c.beginPath(); if (up) { c.moveTo(x - 5, y + 3); c.lineTo(x + 5, y + 3); c.lineTo(x, y - 4); } else { c.moveTo(x - 5, y - 3); c.lineTo(x + 5, y - 3); c.lineTo(x, y + 4); } c.closePath(); c.fill();
+}
+/** Body text in IM Fell (or Cinzel for headers) with no outline, for use on panels. */
+export function bodyFont(size: number, head = false, bold = false) { return `${head ? (bold ? 700 : 600) : bold ? 'bold ' : ''}${head ? ' ' : ''}${size}px ${head ? HUD_FONT : BODY_FONT}`.replace(/^ +/, ''); }

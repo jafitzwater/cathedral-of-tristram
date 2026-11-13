@@ -13,8 +13,8 @@ import { dropItem, locate, compareItems, compareTarget, type Place } from './inv
 import { Scroller } from './touch';
 import { itemPrice, sellPrice, boyPrice, repairCost, rechargeCost, IDENTIFY_COST, DUR_INDESTRUCTIBLE, type Item } from './itemgen';
 import { itemColor } from './render';
-import { drawFrameBox, drawImg } from './art';
-import { glassOrb, hudText, ironFrame, runeJoystick, socket, sweep, xpBar } from './hudSkin';
+import { drawFrameBox } from './art';
+import { BODY_FONT, HUD_FONT, arrow, cached, closeButton, divider, glassOrb, hudText, ironFrame, itemSlot, rarityColor, runeJoystick, skinPanel, socket, sweep, titleBar, well, xpBar } from './hudSkin';
 import { assignSlot, knob, SLOT_COUNT, JOY_RADIUS } from './controls';
 import type { Game } from './game';
 import type { UI } from './ui';
@@ -24,6 +24,8 @@ export interface HudHooks { save(): void; load(): void; newGame(): void; quit():
 export interface Layout { W: number; H: number; dpr: number; inset: { l: number; r: number; t: number; b: number } }
 export interface JoyDraw { ox: number; oy: number; tx: number; ty: number }
 const PS_W = 640, PS_H = 352; // panel space
+/** Order 16: panel open / close transition, s (<= 150 ms). */
+export const FADE_S = 0.12;
 
 /** Positions of the right-hand action cluster (css px), shared by drawing and the tests. */
 export function actionLayout(W: number, H: number, inset: Layout['inset']) {
@@ -92,9 +94,9 @@ export class Hud {
         return { kind: 'inv', x: Math.max(0, Math.min(INV_W - it.w, cx)), y: Math.max(0, Math.min(INV_H - it.h, cy)) };
       }
       if (this.left === 'none') {
-        const bx = 24, by = 280, bc = 34;
+        const { x: bx, y: by, pitch: bc } = Hud.BELT;
         if (q.y >= by - 4 && q.y < by + bc + 2 && q.x >= bx - 4 && q.x < bx + 8 * bc) return { kind: 'belt', i: Math.max(0, Math.min(7, Math.floor((q.x - bx) / bc))) };
-        if (q.x >= 16 && q.x < 24 + 8 * 34 + 8 && q.y >= 254 && q.y < 254 + 70) return { kind: 'none' }; // belt panel frame
+        if (q.x >= bx - 8 && q.x < bx + 8 * bc + 8 && q.y >= by - 26 && q.y < by + bc + 10) return { kind: 'none' }; // belt panel frame
       }
       if (q.x >= X && q.x < X + 320 && q.y >= 0 && q.y < PS_H) return { kind: 'none' }; // on the panel, not on a slot
       if (this.left !== 'none' && q.x >= 0 && q.x < 320 && q.y >= 0 && q.y < PS_H) return { kind: 'none' };
@@ -128,6 +130,20 @@ export class Hud {
     g.refresh();
   }
 
+  /** Order 16 transitions: the 0..1 ease of a panel slot that last changed state at tOpen; a slot that closes leaves a ghost. */
+  private tOpen = new Map<string, number>(); private prevState = new Map<string, string>();
+  ghosts = new Map<string, { kind: string; t: number }>();
+  private ease(key: string, state: string, now: number): number {
+    const prev = this.prevState.get(key);
+    if (prev !== state) {
+      this.prevState.set(key, state); this.tOpen.set(key, now);
+      if ((key === 'left' || key === 'right') && prev && prev !== 'none') this.ghosts.set(key, { kind: prev, t: now }); else if (key === 'left' || key === 'right') this.ghosts.delete(key);
+      if (prev === undefined) this.tOpen.set(key, now - FADE_S); // first frame: no transition
+    }
+    if (state === 'none') return 0;
+    const t = Math.min(1, (now - (this.tOpen.get(key) ?? 0)) / FADE_S);
+    return 1 - (1 - t) * (1 - t) * (1 - t);
+  }
   closeAll() { this.left = 'none'; this.right = 'none'; this.map = false; this.sel = null; this.info = null; }
   panelOpen() { return this.left !== 'none' || this.right !== 'none'; }
   /** Blocks the joystick/world on the given css x when a panel covers it. */
@@ -148,19 +164,33 @@ export class Hud {
     if (this.map) this.drawAutomap(ui);
     const overlay = this.menu !== 'none' || !!g.dialog || g.dead;
     if (!overlay) this.drawControls(ui);
-    if (this.panelOpen() || this.info || overlay) {
-      if (overlay) { c.fillStyle = g.dead ? 'rgba(40,0,0,0.55)' : 'rgba(0,0,0,0.6)'; c.fillRect(0, 0, W, H); }
+    // Order 16: panels ease in (fade + 10-unit slide) over FADE_S and fade out over FADE_S; a closing panel is drawn
+    // without its hit boxes, so it can never take a tap.
+    const aL = this.ease('left', this.left, now), aR = this.ease('right', this.right, now), aI = this.ease('info', this.info ? 'on' : 'none', now);
+    const aO = this.ease('overlay', overlay ? (g.dead ? 'dead' : g.dialog ? 'dialog' : this.menu) : 'none', now);
+    const ghosts = [...this.ghosts.entries()].filter(([, gh]) => now - gh.t < FADE_S);
+    if (this.panelOpen() || this.info || overlay || ghosts.length) {
+      if (overlay) { c.fillStyle = g.dead ? `rgba(40,0,0,${0.55 * aO})` : `rgba(0,0,0,${0.6 * aO})`; c.fillRect(0, 0, W, H); }
       this.enterPS(ui);
-      if (!overlay) {
-        if (this.left === 'char') this.drawChar(ui);
-        if (this.left === 'quest') this.drawQuest(ui);
-        if (this.right === 'inv') this.drawInv(ui);
-        if (this.right === 'spell') this.drawSpells(ui);
+      const layer = (a: number, dx: number, fn: () => void) => { if (a <= 0) return; c.save(); c.globalAlpha *= a; c.translate(dx * (1 - a), 0); fn(); c.restore(); };
+      const ghost = (fn: () => void) => { const nb = ui.boxes.length, nr = ui.regions.length; fn(); ui.boxes.length = nb; ui.regions.length = nr; };
+      for (const [side, gh] of ghosts) {
+        const a = 1 - (now - gh.t) / FADE_S;
+        layer(a, side === 'left' ? -10 : 10, () => ghost(() => {
+          if (gh.kind === 'char') this.drawChar(ui); else if (gh.kind === 'quest') this.drawQuest(ui);
+          else if (gh.kind === 'inv') this.drawInv(ui); else if (gh.kind === 'spell') this.drawSpells(ui);
+        }));
       }
-      if (this.info) this.drawItemInfo(ui, this.info);
-      if (g.dialog) this.drawStore(ui);
-      if (this.menu !== 'none') this.drawMenu(ui);
-      if (g.dead) this.drawDeath(ui);
+      if (!overlay) {
+        if (this.left === 'char') layer(aL, -10, () => this.drawChar(ui));
+        if (this.left === 'quest') layer(aL, -10, () => this.drawQuest(ui));
+        if (this.right === 'inv') layer(aR, 10, () => this.drawInv(ui));
+        if (this.right === 'spell') layer(aR, 10, () => this.drawSpells(ui));
+      }
+      if (this.info) { const it = this.info; layer(aI, 0, () => this.drawItemInfo(ui, it)); }
+      if (g.dialog) layer(aO, 0, () => this.drawStore(ui));
+      if (this.menu !== 'none') layer(aO, 0, () => this.drawMenu(ui));
+      if (g.dead) layer(aO, 0, () => this.drawDeath(ui));
       c.restore();
     }
     const held = this.drag?.item ?? this.carry;
@@ -170,10 +200,8 @@ export class Hud {
     }
   }
   closeBtn(ui: UI, x: number, y: number, fn: () => void) {
-    const c = ui.c;
-    c.fillStyle = '#3a1a12'; c.fillRect(x, y, 30, 30); c.strokeStyle = '#c8a060'; c.lineWidth = 1.5; c.strokeRect(x + 0.5, y + 0.5, 29, 29);
-    c.strokeStyle = '#e8d8a8'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(x + 9, y + 9); c.lineTo(x + 21, y + 21); c.moveTo(x + 21, y + 9); c.lineTo(x + 9, y + 21); c.stroke();
-    ui.area(x - 6, y - 4, 40, 40, fn);
+    closeButton(ui.c, x, y, ui.pressed(x - 6, y - 4, 40, 40));
+    ui.areaMin(x - 6, y - 4, 40, 40, fn);
   }
 
   // ---------- Immortal-style controls (css px) ----------
@@ -218,11 +246,12 @@ export class Hud {
     });
     // --- message line ---
     if (g.msgT > 0) {
-      c.font = '13px serif'; let tw = c.measureText(g.msg).width + 20;
-      if (g.msgSub) { c.font = '12px serif'; tw = Math.max(tw, c.measureText(g.msgSub).width + 20); }
-      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(W / 2 - tw / 2, Tp + 64, tw, g.msgSub ? 40 : 22);
-      ui.text(g.msg, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
-      if (g.msgSub) ui.text(g.msgSub, W / 2, Tp + 94, { align: 'center', size: 12, color: '#a8c8ff' }); // U7: the plain-English effect
+      c.font = `600 13px ${HUD_FONT}`; let tw = c.measureText(g.msg).width + 34;
+      if (g.msgSub) { c.font = `12px ${BODY_FONT}`; tw = Math.max(tw, c.measureText(g.msgSub).width + 34); }
+      tw = Math.ceil(tw / 8) * 8; // fewer distinct plate sizes for the bitmap cache
+      ironFrame(c, W / 2 - tw / 2, Tp + 62, tw, g.msgSub ? 44 : 26, { r: 8, rivets: false });
+      hudText(c, g.msg, W / 2, Tp + 75.5, { align: 'center', size: 12.5, color: '#f0dca8', weight: 600 });
+      if (g.msgSub) { c.font = `12px ${BODY_FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#a8c8ff'; c.fillText(g.msgSub, W / 2, Tp + 93); } // U7: the plain-English effect
     } else if (g.pendingPick) ui.text(`Tap an item to ${g.pendingPick}`, W / 2, Tp + 76, { align: 'center', size: 13, color: '#e8d8a8' });
     // --- joystick (UI sample): translucent rune ring + gripped thumb ---
     const j = this.joy;
@@ -236,11 +265,10 @@ export class Hud {
     const down = (x: number, y: number, r: number) => this.isDown(x - r - 4, y - r - 4, r * 2 + 8, r * 2 + 8);
     // ATTACK
     const a = A.atk;
-    const ar = socket(c, a.x, a.y, a.r, { rim: 'gold', tint: '#5a1610', pressed: this.attackDown, glow: 'rgba(255,90,40,0.95)' });
+    socket(c, a.x, a.y, a.r, { rim: 'gold', tint: '#5a1610', pressed: this.attackDown, glow: 'rgba(255,90,40,0.95)' });
     const as = this.attackDown ? 0.94 : 1;
     drawGlyph(c, d.bow ? 'bow' : 'sword', a.x, a.y - 4 * as, 1.6 * as);
     hudText(c, 'ATTACK', a.x, a.y + 24 * as, { align: 'center', size: 9.5, color: '#f0dca8' });
-    sweep(c, a.x, a.y, ar, busy, 'rgba(0,0,0,0.35)');
     ui.press(a.x - a.r - 6, a.y - a.r - 6, a.r * 2 + 12, a.r * 2 + 12, () => { this.attackDown = true; g.attackHeld = true; }, () => { this.attackDown = false; g.attackHeld = false; });
     // class skill
     const sk = A.skill, skl = { warrior: 'Repair', rogue: 'Disarm', sorcerer: 'Recharge' }[h.cls];
@@ -313,53 +341,64 @@ export class Hud {
     if (it) { g.useItem(it); g.refresh(); } else g.say(life ? 'No healing potion in the belt' : 'No mana potion in the belt', 1.5);
   }
 
-  // ---------- char sheet (panel space, left): live values on the empty CC0 panel frame ----------
-  /** Panel art (empty frame) or, while it loads, the plain code panel. Always blocks taps underneath. */
-  artPanel(ui: UI, key: string, x: number) {
-    if (!drawImg(ui.c, key, x, 0, 320, PS_H)) ui.panel(x, 0, 320, PS_H); else ui.block(x, 0, 320, PS_H);
-  }
+  // ---------- char sheet (panel space, left): Order 16 skin; stat [+] buttons are 40x40 (>= 44 css) ----------
+  /** Skinned panel with a title; always blocks taps underneath. */
+  artPanel(ui: UI, title: string, x: number) { skinPanel(ui.c, x, 0, 320, PS_H, title); ui.block(x, 0, 320, PS_H); }
   drawChar(ui: UI) {
     const g = this.g(), h = g.hero, d = derive(h), c = ui.c;
-    this.artPanel(ui, 'ui/panel-character', 0);
+    this.artPanel(ui, 'Character', 0);
     this.closeBtn(ui, 284, 5, () => { this.left = 'none'; });
-    const val = (s: string, x: number, y: number, w: number, o: { color?: string; size?: number } = {}) => ui.text(s, x + w / 2, y + 9, { align: 'center', size: o.size ?? 11, color: o.color ?? '#e8d8a8' });
-    val(h.name, 80, 42, 199); val(CLASSES[h.cls].name, 80, 68, 119); val(`${h.clvl}`, 262, 68, 35);
-    const rows: ['str' | 'mag' | 'dex' | 'vit', number][] = [['str', d.str], ['mag', d.mag], ['dex', d.dex], ['vit', d.vit]];
-    rows.forEach(([k, v], i) => {
-      const y = 100 + i * 28;
-      val(`${v}`, 140, y, 47, { color: v > h.base[k] ? '#6a8aff' : v < h.base[k] ? '#d04040' : '#e8d8a8' });
+    const label = (s: string, x: number, y: number) => ui.text(s.toUpperCase(), x, y, { size: 9.5, color: '#b89c6a', head: true });
+    const box = (s: string, x: number, y: number, w: number, o: { color?: string; size?: number } = {}) => { well(c, x, y, w, 20); ui.text(s, x + w / 2, y + 10.5, { align: 'center', size: o.size ?? 12, color: o.color ?? '#efe0b8' }); };
+    label('Name', 18, 50); box(h.name, 70, 40, 140);
+    label('Level', 222, 50); box(`${h.clvl}`, 264, 40, 40, { color: '#f0c850' });
+    label('Class', 18, 76); box(CLASSES[h.cls].name, 70, 66, 140);
+    divider(c, 16, 96, 288);
+    const rows: ['str' | 'mag' | 'dex' | 'vit', string, number][] = [['str', 'Strength', d.str], ['mag', 'Magic', d.mag], ['dex', 'Dexterity', d.dex], ['vit', 'Vitality', d.vit]];
+    rows.forEach(([k, name, v], i) => {
+      const y = 104 + i * 42, cy = y + 20;
+      label(name, 18, cy);
+      box(`${v}`, 98, cy - 10, 46, { color: v > h.base[k] ? '#8aa8ff' : v < h.base[k] ? '#e05040' : '#efe0b8' });
       const can = h.statPts > 0 && h.base[k] < CLASSES[h.cls].max[k];
-      // the frame paints a small [+] at (198, y+1); light it up when a point can go there, with a finger-sized hit box
-      if (can) { c.strokeStyle = '#e8c040'; c.lineWidth = 2; c.strokeRect(197, y, 17, 17); ui.area(190, y - 6, 32, 29, () => { spendStat(h, k); g.refresh(); }); }
-      else { c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(197, y, 17, 17); }
+      // level-up [+]: a gold socket, 40x40 hit (>= 44 css px)
+      const pr = can && ui.pressed(150, y, 40, 40);
+      socket(c, 170, cy, 15, can ? { rim: 'gold', tint: '#6a4a14', pressed: pr, glow: 'rgba(255,200,90,0.95)' } : { tint: '#1a1714', dim: true });
+      hudText(c, '+', 170, cy + 0.5, { align: 'center', size: 15, color: can ? '#fff0c0' : '#5a5246' });
+      if (can) ui.area(150, y, 40, 40, () => { spendStat(h, k); g.refresh(); });
     });
-    if (h.statPts) ui.text(`${h.statPts} point${h.statPts > 1 ? 's' : ''} to distribute`, 24, 208, { size: 10, color: '#e8c040' });
-    val(`${Math.ceil(h.hp)}`, 80, 220, 55, { color: h.hp < d.maxHp ? '#ff8070' : '#e8d8a8' }); val(`${d.maxHp}`, 160, 220, 55);
-    val(`${Math.floor(h.mana)}`, 80, 248, 55, { color: h.mana < d.maxMana ? '#90a8ff' : '#e8d8a8' }); val(`${d.maxMana}`, 160, 248, 55);
-    val(`${h.exp}`, 140, 284, 79); val(h.clvl >= 50 ? 'None' : `${EXP_LEVELS[h.clvl]}`, 140, 308, 79); val(`${h.gold}`, 80, 328, 79, { color: '#e8c040' });
-    // D1's combat lines have no box on this frame: small text in the empty column right of the stat buttons
-    const side: [string, string][] = [
+    if (h.statPts) hudText(c, `${h.statPts} point${h.statPts > 1 ? 's' : ''} to spend`, 104, 280, { align: 'center', size: 10, color: '#f0c850' });
+    // right column: life, mana and the combat lines
+    const side: [string, string, string?][] = [
+      ['Life', `${Math.ceil(h.hp)} / ${d.maxHp}`, h.hp < d.maxHp ? '#ff8a78' : undefined], ['Mana', `${Math.floor(h.mana)} / ${d.maxMana}`, h.mana < d.maxMana ? '#9cb4ff' : undefined],
       ['Armor', `${d.ac}`], ['To hit', `${50 + Math.floor(d.dex / 2) + d.toHit + h.clvl + (h.cls === 'warrior' ? 20 : 0)}%`],
       ['Damage', `${d.minDam + d.charDamMod + d.damMod}-${Math.trunc(d.maxDam * (100 + d.pctDam) / 100) + d.charDamMod + d.damMod}`],
-      ['Res mag', `${d.mr}%`], ['Res fire', `${d.fr}%`], ['Res ltn', `${d.lr}%`],
+      ['Resist magic', `${d.mr}%`], ['Resist fire', `${d.fr}%`], ['Resist lightning', `${d.lr}%`],
     ];
-    side.forEach(([a, b], i) => { const y = 104 + i * 17 + (i >= 3 ? 8 : 0); ui.text(a, 226, y, { size: 9, color: '#a89870' }); ui.text(b, 306, y, { size: 10, align: 'right' }); });
+    well(c, 204, 104, 102, 164);
+    side.forEach(([a, b, col], i) => { const y = 116 + i * 19.5 + (i >= 2 ? 3 : 0) + (i >= 5 ? 3 : 0); ui.text(a, 210, y, { size: 10, color: '#a89870' }); ui.text(b, 300, y, { size: 11, align: 'right', color: col ?? '#efe0b8' }); });
+    divider(c, 16, 292, 288);
+    label('Experience', 18, 310); box(`${h.exp}`, 112, 300, 88);
+    label('Next', 210, 310); box(h.clvl >= 50 ? 'None' : `${EXP_LEVELS[h.clvl]}`, 240, 300, 64);
+    label('Gold', 18, 334); box(`${h.gold}`, 112, 324, 88, { color: '#f0c850' });
   }
   drawQuest(ui: UI) {
     const g = this.g();
-    ui.panel(0, 0, 320, PS_H);
-    this.closeBtn(ui, 286, 4, () => { this.left = 'none'; });
-    ui.text('Quest log', 160, 24, { align: 'center', size: 16, bold: true });
-    const q = g.quests.butcher, sc = this.sc('quest'), c = ui.c, top = 44, vh = PS_H - top - 8;
-    c.save(); c.beginPath(); c.rect(4, top, 312, vh); c.clip();
-    ui.beginScroll(4, top, 312, vh, 'quest'); // U4: finger-drag scrolling
+    ui.panel(0, 0, 320, PS_H, 'Quest Log');
+    this.closeBtn(ui, 284, 5, () => { this.left = 'none'; });
+    const q = g.quests.butcher, sc = this.sc('quest'), c = ui.c, top = 44, vh = PS_H - top - 14;
+    well(c, 12, top - 4, 296, vh + 6);
+    c.save(); c.beginPath(); c.rect(14, top, 292, vh); c.clip();
+    ui.beginScroll(14, top, 292, vh, 'quest'); // U4: finger-drag scrolling
     let end = 0;
-    if (q === 'inactive') { ui.text('No active quests', 160, 70 - sc.pos, { align: 'center' }); end = 90; }
+    if (q === 'inactive') { ui.text('No active quests', 160, 70 - sc.pos, { align: 'center', size: 13, color: '#9a8a62' }); end = 90; }
     else {
-      ui.text('The Butcher', 20, 70 - sc.pos, { size: 14, color: q === 'done' ? '#7a7a7a' : '#e8c040' });
-      end = ui.wrap(q === 'done' ? 'The Butcher is dead. The cathedral is a little quieter.' : NPC_TEXT.wounded.butcher, 20, 94 - sc.pos, 280, 16) + sc.pos;
+      const done = q === 'done';
+      c.fillStyle = done ? '#5a5248' : '#b02818'; c.beginPath(); c.arc(28, 70 - sc.pos, 4, 0, Math.PI * 2); c.fill();
+      ui.text('The Butcher', 40, 70 - sc.pos, { size: 14, color: done ? '#8a8070' : '#f0c850', head: true });
+      divider(c, 24, 84 - sc.pos, 272);
+      end = ui.wrap(done ? 'The Butcher is dead. The cathedral is a little quieter.' : NPC_TEXT.wounded.butcher, 26, 102 - sc.pos, 268, 17, { size: 13, color: '#e0d0a8' }) + sc.pos;
     }
-    ui.area(4, top, 312, vh);
+    ui.area(14, top, 292, vh);
     ui.endScroll(); c.restore();
     sc.setMax(end - (top + vh));
   }
@@ -369,46 +408,50 @@ export class Hud {
     handL: [72, 80, 27, 83], head: [130, 40, 55, 55], amulet: [196, 48, 27, 27], chest: [130, 100, 55, 83], handR: [196, 100, 55, 83], ringL: [72, 170, 27, 27], ringR: [226, 170, 27, 27],
   };
   static GRID = { x: 20, y: 220, pitch: 29, cell: 27 };
+  /** Order 16: the belt (while the inventory is open) on a 40-unit pitch (>= 44 css px), reaching into the left margin. */
+  static BELT = { x: -12, y: 286, pitch: 40 };
+  /** Order 16: finger hit rects for the small paperdoll slots, grown away from their neighbours (>= 40 units = 44 css px). */
+  static SLOT_HIT: Partial<Record<BodySlot, [number, number, number, number]>> = { amulet: [196, 35, 40, 40], ringL: [59, 170, 40, 40], ringR: [226, 170, 40, 40], handL: [59, 80, 40, 83] };
   drawInv(ui: UI) {
     const g = this.g(), h = g.hero, c = ui.c, X = 320, dh = derive(h);
-    this.artPanel(ui, 'ui/panel-inventory', X);
+    this.artPanel(ui, 'Inventory', X);
+    const SL: Record<BodySlot, string> = { head: 'Head', amulet: 'Amulet', handL: 'Weapon', chest: 'Armor', handR: 'Shield', ringL: 'Ring', ringR: 'Ring' };
     this.closeBtn(ui, X + 284, 5, () => { this.right = 'none'; this.sel = null; g.pendingPick = ''; });
     for (const s of BODY_SLOTS) {
       const [x, y, w, hh] = Hud.SLOT_RECT[s];
       const it = h.body[s];
-      if (it) {
-        c.fillStyle = this.sel === it ? 'rgba(80,80,140,0.8)' : 'rgba(40,34,24,0.9)'; c.fillRect(X + x, y, w, hh);
-        if (!reqOk(h, it, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(X + x, y, w, hh); }
-        drawIcon(c, it, X + x + 1, y + 1, w - 2, hh - 2);
-      }
-      ui.area(X + x - 2, y - 2, w + 4, hh + 4, () => { if (this.carry) this.placeCarry({ kind: 'body', slot: s }); else if (it) this.tapItem(it); }, it ? () => this.beginDrag(it) : undefined);
+      itemSlot(c, X + x, y, w, hh, it ?? null, { sel: !!it && this.sel === it, bad: !!it && !reqOk(h, it, dh) });
+      if (it) drawIcon(c, it, X + x + 2, y + 2, w - 4, hh - 4);
+      else ui.text(SL[s].toUpperCase(), X + x + w / 2, y + hh / 2, { align: 'center', size: w < 40 ? 6.5 : 8, color: '#5e5242', head: true });
+      const hr = Hud.SLOT_HIT[s] ?? [x - 2, y - 2, w + 4, hh + 4];
+      ui.area(X + hr[0], hr[1], hr[2], hr[3], () => { if (this.carry) this.placeCarry({ kind: 'body', slot: s }); else if (it) this.tapItem(it); }, it ? () => this.beginDrag(it) : undefined);
     }
     const G = Hud.GRID, gx = X + G.x, gy = G.y;
-    // empty cells: a tap puts the cursor item there (U8)
+    // empty cells (cached wells): a tap puts the cursor item there (U8)
+    ui.text('BACKPACK', gx, gy - 9, { size: 9, color: '#b89c6a', head: true });
     for (let cy = 0; cy < INV_H; cy++) for (let cx = 0; cx < INV_W; cx++) {
+      cached(c, 'cell', gx + cx * G.pitch, gy + cy * G.pitch, G.cell, G.cell, 2, (q) => well(q, 0, 0, G.cell, G.cell));
       ui.area(gx + cx * G.pitch, gy + cy * G.pitch, G.pitch, G.pitch, () => { const it = this.carry; if (it) this.placeCarry({ kind: 'inv', x: Math.min(cx, INV_W - it.w), y: Math.min(cy, INV_H - it.h) }); });
     }
     for (const e of h.inv) {
       const x = gx + e.x * G.pitch, y = gy + e.y * G.pitch, w = (e.item.w - 1) * G.pitch + G.cell, hh = (e.item.h - 1) * G.pitch + G.cell;
-      c.fillStyle = this.sel === e.item ? 'rgba(80,80,140,0.8)' : 'rgba(40,34,24,0.9)'; c.fillRect(x, y, w, hh);
-      if (!reqOk(h, e.item, dh)) { c.fillStyle = 'rgba(160,0,0,0.35)'; c.fillRect(x, y, w, hh); }
+      itemSlot(c, x, y, w, hh, e.item, { sel: this.sel === e.item, bad: !reqOk(h, e.item, dh) });
       drawIcon(c, e.item, x + 1, y + 1, w - 2, hh - 2);
       ui.area(x - 1, y - 1, w + 2, hh + 2, () => { if (this.carry) this.placeCarry({ kind: 'inv', x: e.x, y: e.y }); else this.tapItem(e.item); }, () => this.beginDrag(e.item));
     }
-    ui.text(`${h.gold}`, X + 78, 340, { size: 11, color: '#e8c040' });
-    ui.text(this.carry ? 'Tap a slot to place it - outside the panel drops it' : 'Tap: details   Hold: move', X + 300, 211, { align: 'right', size: 9, color: '#9a8a62' });
+    ui.text('GOLD', X + 39, 172, { align: 'center', size: 9, color: '#b89c6a', head: true }); well(c, X + 12, 181, 54, 18); ui.text(`${h.gold}`, X + 39, 190.5, { align: 'center', size: 11, color: '#f0c850' });
+    ui.text(this.carry ? 'Tap a slot to place it - outside the panel drops it' : 'Tap: details   Hold: move', X + 300, 211, { align: 'right', size: 10, color: '#9a8a62' });
     // the belt (8 slots, CC0 belt-slot frame) sits in the left half while the inventory is open
     if (this.left === 'none') {
-      const bx = 24, by = 280, bc = 34;
+      const { x: bx, y: by, pitch: bc } = Hud.BELT;
       ui.panel(bx - 8, by - 26, 8 * bc + 16, bc + 36);
-      ui.text('Belt', bx, by - 12, { size: 11, color: '#d8b860' });
+      ui.text('BELT', bx + 2, by - 11, { size: 10, color: '#d8b058', head: true });
       for (let i = 0; i < 8; i++) {
         const it = h.belt[i], x = bx + i * bc;
-        if (!drawImg(c, 'ui/belt-slot', x, by, bc - 2, bc - 2)) { c.fillStyle = '#15120d'; c.fillRect(x, by, bc - 2, bc - 2); c.strokeStyle = '#6a5a3a'; c.strokeRect(x + 0.5, by + 0.5, bc - 3, bc - 3); }
-        if (this.sel && this.sel === it) { c.fillStyle = 'rgba(80,80,140,0.6)'; c.fillRect(x, by, bc - 2, bc - 2); }
-        ui.text(`${i + 1}`, x + 5, by + 6, { size: 8, color: '#8a7a52' });
+        itemSlot(c, x, by, bc - 2, bc - 2, it ?? null, { sel: !!it && this.sel === it });
+        ui.text(`${i + 1}`, x + 5, by + 6, { size: 8, color: '#8a7a52', head: true });
         if (it) drawIcon(c, it, x + 3, by + 3, bc - 8, bc - 8);
-        ui.area(x, by, bc - 2, bc - 2, () => { if (this.carry) this.placeCarry({ kind: 'belt', i }); else if (it) this.tapItem(it); }, it ? () => this.beginDrag(it) : undefined);
+        ui.area(x - 1, by - 1, bc, bc, () => { if (this.carry) this.placeCarry({ kind: 'belt', i }); else if (it) this.tapItem(it); }, it ? () => this.beginDrag(it) : undefined);
       }
     }
   }
@@ -432,16 +475,24 @@ export class Hud {
   private card(ui: UI, it: Item, x: number, y: number, w: number, title: string | null, cmp: ReturnType<typeof compareItems> | null, btnRows: number) {
     const g = this.g(), h = g.hero;
     const lines = itemLines(it, h.clvl);
-    const top = title ? 18 : 0;
-    const hh = top + 40 + lines.length * 14 + (cmp && cmp.length ? 18 + cmp.length * 13 : 0) + btnRows * 42 + 6;
+    const top = title ? 22 : 0;
+    const hh = top + 44 + lines.length * 14 + (cmp && cmp.length ? 24 + cmp.length * 13 : 0) + btnRows * 46 + 6;
     ui.panel(x, y, w, hh);
-    if (title) { ui.c.fillStyle = 'rgba(200,160,96,0.25)'; ui.c.fillRect(x + 2, y + 2, w - 4, 16); ui.text(title, x + w / 2, y + 11, { align: 'center', size: 10, bold: true, color: '#e8c040' }); }
-    ui.text(it.identified || !it.magical ? it.iname : it.name, x + w / 2 - 10, y + top + 18, { align: 'center', size: 13, bold: true, color: itemColor(it) });
-    lines.forEach(([t, col], i) => ui.text(t, x + w / 2, y + top + 38 + i * 14, { align: 'center', size: 11, color: col }));
+    const c = ui.c, col = rarityColor(it) ?? '#e0e0e0';
+    if (title) titleBar(c, x + 10, y + 6, w - 20, title, 10);
+    // name plate in the item's D1 rarity colour, with a matching rule under it
+    ui.text(it.identified || !it.magical ? it.iname : it.name, x + w / 2 - 10, y + top + 20, { align: 'center', size: 13, color: itemColor(it), head: true });
+    c.fillStyle = col; c.globalAlpha *= 0.6; c.fillRect(x + 30, y + top + 31, w - 60, 1); c.globalAlpha /= 0.6;
+    lines.forEach(([t, lc], i) => ui.text(t, x + w / 2, y + top + 42 + i * 14, { align: 'center', size: 12, color: lc }));
     if (cmp && cmp.length) {
-      const cy = y + top + 38 + lines.length * 14 + 4;
-      ui.text('vs equipped', x + w / 2, cy, { align: 'center', size: 9, color: '#9a8a62' });
-      cmp.forEach((r, i) => ui.text(`${r.label}: ${r.now}  (${r.cur})`, x + w / 2, cy + 14 + i * 13, { align: 'center', size: 10, color: r.better === null ? '#c8b890' : r.better ? '#50e050' : '#ff5050' }));
+      const cy = y + top + 42 + lines.length * 14 + 2;
+      divider(c, x + 24, cy - 4, w - 48);
+      ui.text('VS EQUIPPED', x + w / 2, cy + 6, { align: 'center', size: 8.5, color: '#b89c6a', head: true });
+      cmp.forEach((r, i) => {
+        const ry = cy + 20 + i * 13, rc = r.better === null ? '#c8b890' : r.better ? '#60e060' : '#ff6050';
+        ui.text(`${r.label}: ${r.now}  (${r.cur})`, x + w / 2, ry, { align: 'center', size: 11, color: rc });
+        if (r.better !== null) { c.font = `11px ${BODY_FONT}`; const tw = c.measureText(`${r.label}: ${r.now}  (${r.cur})`).width; arrow(c, x + w / 2 - tw / 2 - 9, ry, !!r.better, rc); }
+      });
     }
     return hh;
   }
@@ -472,14 +523,14 @@ export class Hud {
       const rh = this.card(ui, it, 328, 16, cw, null, compareItems(it, cur), rows);
       void lh;
       this.closeBtn(ui, 328 + cw - 34, 20, () => { this.info = null; });
-      bx = 338; by = 16 + rh - rows * 42 - 2; bw = cw - 20;
+      bx = 338; by = 16 + rh - rows * 46 - 2; bw = cw - 20;
     } else {
       const cw = 360, hh = this.card(ui, it, 140, 30, cw, null, null, rows);
       this.closeBtn(ui, 140 + cw - 34, 34, () => { this.info = null; });
-      bx = 150; by = 30 + hh - rows * 42 - 2; bw = cw - 20;
+      bx = 150; by = 30 + hh - rows * 46 - 2; bw = cw - 20;
     }
     const per = Math.min(4, btns.length), w1 = Math.min(84, bw / Math.max(1, per) - 6);
-    btns.forEach(([l, f], i) => ui.button(l, bx + (i % 4) * (w1 + 6), by + Math.floor(i / 4) * 42, w1, 34, f, { size: 12 }));
+    btns.forEach(([l, f], i) => ui.button(l, bx + (i % 4) * (w1 + 6), by + Math.floor(i / 4) * 46, w1, 40, f, { size: 11, danger: l === 'Drop' }));
   }
 
   // ---------- spellbook (panel space, right): CC0 two-page frame; left page = learned spells, right = staff + scrolls ----------
@@ -487,7 +538,8 @@ export class Hud {
   static SPELL_BOX: [number, number][] = [[28, 70], [90, 70], [28, 140], [90, 140]];
   drawSpells(ui: UI) {
     const g = this.g(), h = g.hero, X = 320, c = ui.c;
-    this.artPanel(ui, 'ui/panel-spellbook', X);
+    this.artPanel(ui, 'Spellbook', X);
+    well(c, X + 14, 40, 142, 192); well(c, X + 164, 40, 142, 192);
     this.closeBtn(ui, X + 284, 5, () => { this.right = 'none'; });
     type E = { id: string; name: string; sub: string; glyph: string };
     const learned: E[] = [], carried: E[] = [];
@@ -500,14 +552,15 @@ export class Hud {
     const pages = Math.max(1, Math.ceil(learned.length / 4), Math.ceil(carried.length / 4));
     this.spellPage = Math.min(this.spellPage, pages - 1);
     const page = (list: E[], px: number, title: string) => {
-      ui.text(title, X + px + 57, 54, { align: 'center', size: 10, color: '#d8b860' });
+      ui.text(title.toUpperCase(), X + px + 57, 53, { align: 'center', size: 9.5, color: '#d8b058', head: true }); divider(c, X + px - 8, 62, 130);
       list.slice(this.spellPage * 4, this.spellPage * 4 + 4).forEach((e, i) => {
         const [bx, by] = Hud.SPELL_BOX[i], x = X + px + bx - 28, y = by, slot = h.slots.indexOf(e.id);
-        if (this.spellSel === e.id) { c.fillStyle = 'rgba(80,80,140,0.6)'; c.fillRect(x, y, 55, 55); }
+        const on = this.spellSel === e.id;
+        well(c, x, y, 55, 55, { border: on ? '#f4d690' : slot >= 0 ? '#6a8aff' : 'rgba(150,120,70,0.6)', glow: on ? 'rgba(244,214,144,0.8)' : undefined, fill: on ? '#1e1608' : undefined });
         drawGlyph(c, e.glyph, x + 27, y + 19, 1.2);
-        ui.text(shortName(e.name), x + 27, y + 39, { align: 'center', size: 9 });
+        ui.text(shortName(e.name), x + 27, y + 38, { align: 'center', size: 10, color: '#efe0b8' });
         ui.text(e.sub, x + 27, y + 49, { align: 'center', size: 8, color: '#9a8a62' });
-        if (slot >= 0) ui.text(`${slot + 1}`, x + 50, y + 7, { align: 'right', size: 10, bold: true, color: '#9cf' });
+        if (slot >= 0) { socket(c, x + 49, y + 7, 6.5, { rim: 'gold', tint: '#14244a' }); hudText(c, `${slot + 1}`, x + 49, y + 7.5, { align: 'center', size: 8, color: '#cfe0ff' }); }
         ui.area(x - 3, y - 3, 61, 61, () => {
           if (this.spellSel === e.id && slot < 0) { const free = h.slots.indexOf(null); if (free >= 0) h.slots = assignSlot(h.slots, free, e.id); }
           this.spellSel = e.id;
@@ -520,7 +573,7 @@ export class Hud {
     if (!learned.length && !carried.length) ui.wrap('No spells yet. Read books, or carry scrolls or a staff.', X + 24, 214, 120, 13, { size: 10, color: '#9a8a62' });
     // slot row (Order 4 assignment flow) in the pages' empty lower half
     const sel = this.spellSel ? [...learned, ...carried].find((e) => e.id === this.spellSel) : null;
-    ui.text(sel ? `Assign ${skillLabel(g, sel.id)} to:` : 'Tap a spell, then a slot', X + 160, 236, { align: 'center', size: 10, color: '#d8b860' });
+    ui.text(sel ? `Assign ${skillLabel(g, sel.id)} to:` : 'Tap a spell, then a slot', X + 160, 241, { align: 'center', size: 11, color: '#d8b860' });
     for (let i = 0; i < SLOT_COUNT; i++) {
       const id = h.slots[i], x = X + [24, 86, 172, 234][i];
       ui.button(id ? shortName(skillLabel(g, id)) : `Slot ${i + 1}`, x, 250, 60, 40, () => {
@@ -528,8 +581,9 @@ export class Hud {
         else if (id) h.slots = assignSlot(h.slots, i, null);
       }, { size: 10, on: !!id });
     }
-    ui.text(`${this.spellPage + 1}`, X + 81, 334, { align: 'center', size: 10 }); ui.text(`${pages}`, X + 137, 334, { align: 'center', size: 10 });
-    if (pages > 1) ui.area(X + 56, 316, 110, 34, () => { this.spellPage = (this.spellPage + 1) % pages; });
+    divider(c, X + 20, 304, 280);
+    hudText(c, `PAGE ${this.spellPage + 1} / ${pages}`, X + 160, 324, { align: 'center', size: 10.5, color: '#d8b058' });
+    if (pages > 1) { arrow(c, X + 220, 324, false); c.save(); c.translate(X + 100, 324); c.rotate(Math.PI); arrow(c, 0, 0, false); c.restore(); ui.areaMin(X + 56, 310, 208, 34, () => { this.spellPage = (this.spellPage + 1) % pages; }); }
   }
 
   // ---------- full automap (css px) ----------
@@ -553,58 +607,67 @@ export class Hud {
 
   // ---------- stores / NPC dialogs ----------
   drawStore(ui: UI) {
-    const g = this.g(), dlg = g.dialog!, n = dlg.npc, h = g.hero, tx = NPC_TEXT[n.id];
+    const g = this.g(), dlg = g.dialog!, n = dlg.npc, h = g.hero, tx = NPC_TEXT[n.id], c = ui.c;
     const x = 60, y = 16, w = 520, hh = 330;
-    ui.panel(x, y, w, hh);
-    ui.text(n.name, x + w / 2, y + 20, { align: 'center', size: 15, bold: true, color: '#e8c040' });
+    ui.panel(x, y, w, hh, n.name);
     const close = () => { g.dialog = null; this.store = 'menu'; this.pick = null; this.scroll = 0; this.sc('store').pos = 0; };
     const back = () => { this.store = 'menu'; this.pick = null; this.scroll = 0; this.sc('store').pos = 0; };
     this.closeBtn(ui, x + w - 36, y + 6, close);
+    const goldPlate = (gx: number, gy: number) => { ui.text('GOLD', gx, gy, { size: 9, color: '#b89c6a', head: true }); well(c, gx + 34, gy - 9, 80, 18); ui.text(`${h.gold}`, gx + 74, gy + 0.5, { align: 'center', size: 12, color: '#f0c850' }); };
     if (this.store === 'menu' || this.store === 'talk') {
-      const ty = ui.wrap(this.store === 'talk' ? dlg.text : tx.greet, x + 30, y + 52, w - 60, 16, { align: 'center' });
+      // dialogue: the NPC's words on a dark inset, then the D1 menu as finger-sized iron buttons (2 columns, 40 tall = 44+ css)
+      well(c, x + 20, y + 40, w - 40, 86);
+      const ty = ui.wrap(this.store === 'talk' ? dlg.text : tx.greet, x + 34, y + 56, w - 68, 17, { align: 'center', size: 13, color: '#e8d8b0' });
+      const by0 = Math.max(ty + 12, y + 140), bw = 228, bh = 40;
       tx.menu.forEach((label, i) => {
-        ui.menuItem(label, x, Math.max(ty + 20, y + 130) + i * 30, w, () => this.storeAction(n.id, i, tx.menu.length, close));
+        const last = i === tx.menu.length - 1, col = last ? 1 : i % 2, row = last ? Math.ceil((tx.menu.length - 1) / 2) : Math.floor(i / 2);
+        ui.button(label, x + 24 + col * (bw + 16), by0 + row * 46, bw, bh, () => this.storeAction(n.id, i, tx.menu.length, close), { size: 12, danger: last });
       });
-      ui.text(`Your gold: ${h.gold}`, x + w - 20, y + hh - 16, { align: 'right', size: 11, color: '#e8c040' });
+      goldPlate(x + 24, y + hh - 18);
       return;
     }
     const list = this.storeList();
-    const per = 7, RH = 34, top = y + 58, vh = per * RH;
+    const per = 5, RH = 40, top = y + 58, vh = per * RH; // rows 40 tall: >= 44 css px
     const sc = this.sc('store'); sc.setMax(list.length * RH - vh);
-    ui.text(storeTitle(this.store), x + w / 2, y + 44, { align: 'center', size: 13 });
-    if (!list.length) ui.text('You have nothing for this.', x + w / 2, y + 120, { align: 'center' });
+    hudText(c, storeTitle(this.store), x + w / 2, y + 44, { align: 'center', size: 12, color: '#f0dca8', weight: 600 });
+    well(c, x + 12, top - 2, w - 24, vh + 4);
+    if (!list.length) ui.text('You have nothing for this.', x + w / 2, y + 120, { align: 'center', size: 13 });
     // U4: the list scrolls with a finger drag (momentum; a drag never buys), the arrows still page it
-    const c = ui.c;
-    c.save(); c.beginPath(); c.rect(x + 4, top, w - 8, vh); c.clip();
-    ui.beginScroll(x + 4, top, w - 8, vh, 'store');
+    c.save(); c.beginPath(); c.rect(x + 14, top, w - 28, vh); c.clip();
+    ui.beginScroll(x + 14, top, w - 28, vh, 'store');
     const first = Math.max(0, Math.floor(sc.pos / RH)), last = Math.min(list.length, Math.ceil((sc.pos + vh) / RH));
     for (let i = first; i < last; i++) {
-      const e = list[i], yy = top + 4 + i * RH - sc.pos;
+      const e = list[i], yy = top + i * RH - sc.pos;
       const ok = this.store === 'buy' || this.store === 'premium' || this.store === 'wirt' ? reqOk(h, e.item, derive(h)) : true;
       const on = this.pick === e.item;
-      c.fillStyle = on ? '#5a4a2a' : '#3a3226'; c.fillRect(x + 16, yy, w - 32, 30);
-      c.strokeStyle = '#8a7a52'; c.lineWidth = 1; c.strokeRect(x + 16.5, yy + 0.5, w - 33, 29);
-      const y0 = Math.max(top, yy), y1 = Math.min(top + vh, yy + 30);
-      if (y1 > y0) ui.area(x + 16, y0, w - 32, y1 - y0, () => { this.pick = e.item; });
-      ui.text(e.item.identified || !e.item.magical ? e.item.iname : e.item.name, x + 26, yy + 10, { size: 12, color: ok ? itemColor(e.item) : '#d04040' });
-      ui.text(itemLines(e.item, h.clvl).slice(0, 2).map((l) => l[0]).join('   '), x + 26, yy + 23, { size: 9, color: '#9a8a62' });
-      ui.text(`${e.price}`, x + w - 28, yy + 15, { size: 12, align: 'right', color: '#e8c040' });
+      itemSlot(c, x + 18, yy + 3, 34, 34, e.item, { sel: on, bad: !ok }); drawIcon(c, e.item, x + 20, yy + 5, 30, 30);
+      if (on) { c.fillStyle = 'rgba(216,176,88,0.12)'; c.fillRect(x + 56, yy + 2, w - 96, RH - 4); c.strokeStyle = 'rgba(244,214,144,0.7)'; c.lineWidth = 1; c.strokeRect(x + 56.5, yy + 2.5, w - 97, RH - 5); }
+      c.fillStyle = 'rgba(150,120,70,0.25)'; c.fillRect(x + 56, yy + RH - 1, w - 96, 1);
+      const y0 = Math.max(top, yy), y1 = Math.min(top + vh, yy + RH);
+      if (y1 > y0) ui.area(x + 14, y0, w - 50, y1 - y0, () => { this.pick = e.item; });
+      ui.text(e.item.identified || !e.item.magical ? e.item.iname : e.item.name, x + 64, yy + 14, { size: 12, color: ok ? itemColor(e.item) : '#e05040', head: true });
+      ui.text(itemLines(e.item, h.clvl).slice(0, 2).map((l) => l[0]).join('   '), x + 64, yy + 29, { size: 10.5, color: '#a89870' });
+      hudText(c, `${e.price}`, x + w - 48, yy + 20, { size: 12, align: 'right', color: '#f0c850' });
     }
     ui.endScroll();
     c.restore();
     if (list.length > per) {
-      ui.button('▲', x + w - 46, y + 36, 30, 22, () => { sc.vel = 0; sc.pos = Math.max(0, sc.pos - vh); });
-      ui.button('▼', x + w - 46, y + hh - 62, 30, 22, () => { sc.vel = 0; sc.pos = Math.min(sc.max, sc.pos + vh); });
-      // scroll bar
-      const bh = Math.max(20, vh * vh / (list.length * RH)), byy = top + (vh - bh) * (sc.max ? sc.pos / sc.max : 0);
-      c.fillStyle = 'rgba(200,160,96,0.5)'; c.fillRect(x + w - 10, byy, 4, bh);
+      const ax = x + w - 30;
+      const pu = ui.pressed(ax - 14, top, 28, 28), pd = ui.pressed(ax - 14, top + vh - 28, 28, 28);
+      socket(c, ax, top + 15, 13, { pressed: pu }); arrow(c, ax, top + 15, true);
+      socket(c, ax, top + vh - 15, 13, { pressed: pd }); arrow(c, ax, top + vh - 15, false);
+      ui.areaMin(ax - 14, top + 1, 28, 28, () => { sc.vel = 0; sc.pos = Math.max(0, sc.pos - vh); });
+      ui.areaMin(ax - 14, top + vh - 29, 28, 28, () => { sc.vel = 0; sc.pos = Math.min(sc.max, sc.pos + vh); });
+      // scroll bar (gold thumb in an iron groove)
+      const gy0 = top + 32, gh = vh - 64, bh = Math.max(16, gh * vh / (list.length * RH)), byy = gy0 + (gh - bh) * (sc.max ? sc.pos / sc.max : 0);
+      well(c, ax - 3, gy0, 6, gh); c.fillStyle = '#c89a48'; c.fillRect(ax - 2, byy, 4, bh);
     }
-    const by = y + hh - 34;
+    const by = y + hh - 52;
     const sel = list.find((e) => e.item === this.pick);
-    ui.button(verb(this.store), x + 16, by, 110, 26, () => { if (sel) this.storeDo(sel.item, sel.price); }, { disabled: !sel });
-    if (this.pick) ui.button('Info', x + 132, by, 70, 26, () => { this.info = this.pick; });
-    ui.button('Back', x + w - 96, by, 80, 26, back);
-    ui.text(`Your gold: ${h.gold}`, x + w / 2 + 60, by + 13, { align: 'center', size: 11, color: '#e8c040' });
+    ui.button(verb(this.store), x + 16, by, 120, 40, () => { if (sel) this.storeDo(sel.item, sel.price); }, { disabled: !sel, on: !!sel });
+    if (this.pick) ui.button('Info', x + 144, by, 84, 40, () => { this.info = this.pick; });
+    ui.button('Back', x + w - 116, by, 100, 40, back);
+    goldPlate(x + w / 2 - 40, by + 20);
   }
   storeAction(id: string, i: number, n: number, close: () => void) {
     const g = this.g(), dlg = g.dialog!;
@@ -672,31 +735,42 @@ export class Hud {
   // ---------- menus ----------
   drawMenu(ui: UI) {
     ui.block(-1000, -1000, 4000, 4000);
+    const c = ui.c;
     if (this.menu === 'main') {
+      ui.panel(190, 34, 260, 310, 'Game Menu');
       const items: [string, () => void][] = [
         ['Save Game', () => { this.hooks.save(); this.menu = 'none'; }], ['Options', () => { this.menu = 'options'; }],
         ['New Game', () => { this.menu = 'none'; this.hooks.newGame(); }], ['Load Game', () => { this.menu = 'none'; this.hooks.load(); }],
         ['Quit Game', () => { this.menu = 'none'; this.hooks.quit(); }], ['Resume', () => { this.menu = 'none'; }],
       ];
-      items.forEach(([l, f], i) => ui.menuItem(l, 170, 110 + i * 44, 300, f, { size: 22 }));
+      items.forEach(([l, f], i) => ui.button(l, 216, 70 + i * 45, 208, 40, f, { size: 14, on: l === 'Resume' }));
     } else {
       const [mv, sv] = this.hooks.vol();
-      ui.text('Options', VIEW_W / 2, 100, { align: 'center', size: 22, color: '#d8b860' });
+      ui.panel(150, 60, 340, 240, 'Options');
       const row = (label: string, v: number, y: number, set: (n: number) => void) => {
-        ui.text(label, 200, y, { size: 16 }); ui.button('-', 340, y - 14, 32, 28, () => set(Math.max(0, v - 1))); ui.text(`${v}`, 395, y, { align: 'center', size: 16 }); ui.button('+', 420, y - 14, 32, 28, () => set(Math.min(10, v + 1)));
+        ui.text(label.toUpperCase(), 176, y, { size: 12, color: '#d8c89a', head: true });
+        ui.button('-', 330, y - 20, 40, 40, () => set(Math.max(0, v - 1)), { size: 18 });
+        well(c, 376, y - 12, 38, 24); hudText(c, `${v}`, 395, y + 0.5, { align: 'center', size: 14, color: '#f0c850' });
+        ui.button('+', 420, y - 20, 40, 40, () => set(Math.min(10, v + 1)), { size: 18 });
+        // a slim volume gauge under the row
+        xpBar(c, 176, y + 15, 130, v / 10);
       };
-      row('Music volume', mv, 170, (n) => this.hooks.setVolumes(n, sv));
-      row('Sound volume', sv, 220, (n) => this.hooks.setVolumes(mv, n));
-      ui.menuItem('Back', 170, 300, 300, () => { this.menu = 'main'; }, { size: 20 });
+      row('Music volume', mv, 128, (n) => this.hooks.setVolumes(n, sv));
+      row('Sound volume', sv, 190, (n) => this.hooks.setVolumes(mv, n));
+      ui.button('Back', 250, 240, 140, 40, () => { this.menu = 'main'; }, { size: 14 });
     }
   }
   drawDeath(ui: UI) {
-    const g = this.g();
+    const g = this.g(), c = ui.c;
     ui.block(-1000, -1000, 4000, 4000);
-    ui.text('You have died', VIEW_W / 2, 150, { align: 'center', size: 34, color: '#c02020', bold: true });
-    ui.menuItem('Restart in town', 170, 230, 300, () => g.restartInTown(), { size: 20 });
-    ui.menuItem('Load Game', 170, 275, 300, () => this.hooks.load(), { size: 20 });
-    ui.menuItem('Main Menu', 170, 320, 300, () => this.hooks.quit(), { size: 20 });
+    const vg = c.createRadialGradient(VIEW_W / 2, 176, 40, VIEW_W / 2, 176, 360); vg.addColorStop(0, 'rgba(60,0,0,0)'); vg.addColorStop(1, 'rgba(30,0,0,0.75)');
+    c.fillStyle = vg; c.fillRect(-200, -200, VIEW_W + 400, PS_H + 400);
+    c.save(); c.shadowColor = 'rgba(255,40,20,0.75)'; c.shadowBlur = 18;
+    hudText(c, 'YOU HAVE DIED', VIEW_W / 2, 118, { align: 'center', size: 34, color: '#d02818', weight: 700 }); c.restore();
+    divider(c, VIEW_W / 2 - 150, 146, 300);
+    ui.button('Restart in town', 200, 170, 240, 40, () => g.restartInTown(), { size: 14, danger: true });
+    ui.button('Load Game', 200, 220, 240, 40, () => this.hooks.load(), { size: 14 });
+    ui.button('Main Menu', 200, 270, 240, 40, () => this.hooks.quit(), { size: 14 });
   }
 }
 
@@ -756,7 +830,7 @@ export function itemIconId(it: Item): string {
 }
 export function drawIcon(c: CanvasRenderingContext2D, it: Item, x: number, y: number, w: number, h: number) {
   const id = itemIconId(it);
-  if (id && drawFrameBox(c, id, x, y, w, h)) { if (it.magical) { c.strokeStyle = itemColor(it); c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1); } return; }
+  if (id && drawFrameBox(c, id, x, y, w, h)) return; // Order 16: the slot well carries the rarity border
   const col = it.misc === 'IMISC_HEAL' || it.misc === 'IMISC_FULLHEAL' ? '#c02020' : it.misc === 'IMISC_MANA' || it.misc === 'IMISC_FULLMANA' ? '#2040d0'
     : it.misc === 'IMISC_REJUV' || it.misc === 'IMISC_FULLREJUV' ? '#a040c0' : it.misc.startsWith('IMISC_SCROLL') ? '#d8c8a0' : it.misc === 'IMISC_BOOK' ? '#6a3a2a'
     : it.misc.startsWith('IMISC_ELIX') ? '#e0a020' : '#8a8a8a';

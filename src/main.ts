@@ -13,21 +13,28 @@ import { joystickVector } from './controls';
 import { T } from './levels/types';
 import { TOWN_PORTAL_SPOT } from './levels/town';
 import { TAP_SLOP, HOLD_MS } from './touch';
-import { saveGame, loadGame, listHeroes, peekHero, deleteHero } from './save';
+import { saveGame, loadGame, listHeroes, peekHero, deleteHero, SAVE_NS } from './save';
 import creditsText from '../CREDITS.md?raw';
 import { NAME_BOX, NAME_CANCEL, NAME_OK, cssRect, frontLayout, inputFontPx, isFormTarget } from './nameEntry';
 import { CLASSES } from './data/classes';
 
 // UI sample: the OFL Cinzel face for the HUD lettering, bundled locally (16 KB Latin subset); canvas falls back to serif until it loads.
-try { const f = new FontFace('Cinzel', `url(${import.meta.env.BASE_URL}fonts/cinzel-latin.woff2)`, { weight: '400 900' }); document.fonts.add(f); f.load().catch(() => {}); } catch { /* no FontFace API */ }
+// Order 16: plus the OFL IM Fell English body face (37 KB Latin subset) for descriptions, dialogue and item lines.
+for (const [fam, file, weight] of [['Cinzel', 'cinzel-latin.woff2', '400 900'], ['IM Fell English', 'imfell-latin.woff2', '400']]) {
+  try { const f = new FontFace(fam, `url(${import.meta.env.BASE_URL}fonts/${file})`, { weight }); document.fonts.add(f); f.load().catch(() => {}); } catch { /* no FontFace API */ }
+}
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const nameInput = document.getElementById('name') as HTMLInputElement;
 const nameForm = document.getElementById('nameForm') as HTMLFormElement;
 const nameOk = document.getElementById('nameOk') as HTMLButtonElement, nameCancel = document.getElementById('nameCancel') as HTMLButtonElement;
 const safe = document.getElementById('safe') as HTMLDivElement;
 const c = canvas.getContext('2d', { alpha: false })!;
+// Order 16: the HUD, menus and front-end screens draw on their own transparent canvas at the full device pixel ratio (up to
+// 3x) so text and trim stay sharp on 3x phones; the world canvas stays capped at 2x (fill cost). Input stays on #view.
+const uiCanvas = document.getElementById('ui') as HTMLCanvasElement;
+const uc = uiCanvas.getContext('2d')!;
 const ui = new UI();
-const opts = (() => { try { return JSON.parse(localStorage.getItem('cot.options') ?? '') as { music: number; sfx: number }; } catch { return { music: 7, sfx: 7 }; } })();
+const opts = (() => { try { return JSON.parse(localStorage.getItem(`${SAVE_NS}options`) ?? '') as { music: number; sfx: number }; } catch { return { music: 7, sfx: 7 }; } })();
 const audio = new Audio(opts.music, opts.sfx);
 let artReady = false;
 void loadArt(import.meta.env.BASE_URL).then(() => { artReady = true; });
@@ -46,7 +53,7 @@ const hud = new Hud(() => game!, {
   load: () => { if (game) { const g = loadGame(localStorage, game.hero.name); if (g) startGame(g); else game.say('No saved game'); } },
   newGame: () => { game = null; go('menu'); },
   quit: () => { if (game) (hud.stow(), saveGame(localStorage, game)); game = null; go('menu'); },
-  setVolumes: (m, s) => { audio.setVolumes(m, s); localStorage.setItem('cot.options', JSON.stringify({ music: m, sfx: s })); },
+  setVolumes: (m, s) => { audio.setVolumes(m, s); localStorage.setItem(`${SAVE_NS}options`, JSON.stringify({ music: m, sfx: s })); },
   vol: () => [audio.musicVol, audio.sfxVol],
 });
 const scr = new Screens({
@@ -78,19 +85,26 @@ function placeName() {
 const vv = () => window.visualViewport ? { width: visualViewport!.width, height: visualViewport!.height, offsetLeft: visualViewport!.offsetLeft, offsetTop: visualViewport!.offsetTop } : null;
 
 // ---- full-screen sizing (no black bars), DPR-crisp backing store, safe-area insets ----
-let W = 844, H = 390, dpr = 1;
+let W = 844, H = 390, dpr = 1, udpr = 1, split = false;
 const inset = { l: 0, r: 0, t: 0, b: 0 };
 function fit() {
   W = window.innerWidth; H = window.innerHeight; dpr = Math.min(2, window.devicePixelRatio || 1);
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
+  // Order 16: the UI gets its own canvas only where it buys sharpness (3x phones: world 2x, text 3x); at <= 2x it draws
+  // on the world canvas at the same resolution, so there is no second full-screen layer to composite
+  udpr = Math.min(3, window.devicePixelRatio || 1); split = udpr > dpr;
+  if (!split) udpr = dpr;
+  uiCanvas.style.display = split ? '' : 'none';
+  uiCanvas.width = split ? Math.round(W * udpr) : 1; uiCanvas.height = split ? Math.round(H * udpr) : 1;
+  uiCanvas.style.width = `${W}px`; uiCanvas.style.height = `${H}px`;
   const cs = getComputedStyle(safe);
   inset.l = parseFloat(cs.paddingLeft) || 0; inset.r = parseFloat(cs.paddingRight) || 0; inset.t = parseFloat(cs.paddingTop) || 0; inset.b = parseFloat(cs.paddingBottom) || 0;
   // Order 9: world zoom shows about D1's 640x352 play area (same area, the phone's aspect): on 844x390 that is ~698x323 world px.
   // The HUD and touch controls are drawn in css px, so they keep their size.
   // Order 10 U3: zoomed out 1.62x from that (between D1 and Diablo Immortal): the hero is ~72 px tall on 844x390; the HUD keeps its size.
   view.zoom = worldZoom(W, H); view.w = W / view.zoom; view.h = H / view.zoom;
-  hud.lay = { W, H, dpr, inset: { ...inset } };
+  hud.lay = { W, H, dpr: udpr, inset: { ...inset } };
 }
 addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 200)); fit();
 // Order 8: the phone keyboard resizes (Android) or pans (iOS) the visual viewport; re-fit and keep the name box visible
@@ -179,7 +193,10 @@ function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; time += dt;
   frames++; fpsT += dt; if (fpsT >= 1) { fps = frames / fpsT; fpsLog.push(Math.round(fps)); if (fpsLog.length > 120) fpsLog.shift(); frames = 0; fpsT = 0; }
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ui.begin(c, dpr);
+  const u = split ? uc : c;
+  if (split) { uc.setTransform(1, 0, 0, 1, 0, 0); uc.clearRect(0, 0, uiCanvas.width, uiCanvas.height); }
+  u.setTransform(udpr, 0, 0, udpr, 0, 0);
+  ui.begin(u, udpr); ui.fingers = [...hud.fingers.values()];
   if (screen === 'game' && game) {
     if (hud.menu === 'none' && !game.dialog) game.update(dt);
     if (artReady) void art.setGroups(zones.update(game, dt));
@@ -188,13 +205,13 @@ function frame(now: number) {
     game.sfx.length = 0;
     c.setTransform(dpr * view.zoom, 0, 0, dpr * view.zoom, 0, 0);
     drawWorld(c, game, time);
-    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    u.setTransform(udpr, 0, 0, udpr, 0, 0);
     hud.draw(ui);
   } else {
     // front-end screens keep their D1 640x480 layout, centred over a full-screen backdrop
     c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
     const { s, ox, oy } = frontLayout(W, H, vv());
-    c.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
+    u.setTransform(udpr * s, 0, 0, udpr * s, udpr * ox, udpr * oy);
     if (screen === 'loading') {
       scr.draw(ui, 'loading', dt);
       loadT -= dt; artWaitT += dt;
@@ -208,4 +225,4 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, drawWorld: (cx: CanvasRenderingContext2D, t: number) => game && drawWorld(cx, game, t), size: () => [W, H, dpr], frame: (id: string) => art.frame(id), get art() { return { mib: art.mib, peak: art.peakMib, resident: art.residentKeys(), zone: zones.zone, engaged: zones.engaged, loads: art.loads, releases: art.releases, errors: art.errors }; } }; // read-only handle, only with ?smoke (headless smoke test)
+if (location.search.includes('smoke')) (window as unknown as { __cot: unknown }).__cot = { get game() { return game; }, get screen() { return screen; }, get fps() { return fpsLog.slice(); }, get workMs() { return workLog.slice(); }, hud, view, ui, drawWorld: (cx: CanvasRenderingContext2D, t: number) => game && drawWorld(cx, game, t), size: () => [W, H, dpr, udpr, split], frame: (id: string) => art.frame(id), get art() { return { mib: art.mib, peak: art.peakMib, resident: art.residentKeys(), zone: zones.zone, engaged: zones.engaged, loads: art.loads, releases: art.releases, errors: art.errors }; } }; // read-only handle, only with ?smoke (headless smoke test)

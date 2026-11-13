@@ -5,6 +5,7 @@ import { VIEW_W, VIEW_H } from './iso';
 import type { UI } from './ui';
 import type { Hero } from './player';
 import { NAME_BOX, NAME_CANCEL, NAME_OK, resolveName } from './nameEntry';
+import { divider, hudText, well, xpBar } from './hudSkin';
 
 export type Screen = 'title' | 'menu' | 'credits' | 'select' | 'class' | 'name' | 'game' | 'loading' | 'exit';
 export interface ScreenHooks {
@@ -20,7 +21,13 @@ export class Screens {
     const c = ui.c;
     const gr = c.createRadialGradient(VIEW_W / 2, VIEW_H / 2, 40, VIEW_W / 2, VIEW_H / 2, 420);
     gr.addColorStop(0, '#2a0a06'); gr.addColorStop(1, '#000'); c.fillStyle = gr; c.fillRect(0, 0, VIEW_W, VIEW_H);
-    if (title) { ui.text('CATHEDRAL OF TRISTRAM', VIEW_W / 2, 70, { align: 'center', size: 34, color: '#c03020', bold: true }); ui.text('a Diablo (1996) homage', VIEW_W / 2, 102, { align: 'center', size: 13, color: '#8a6a4a' }); }
+    if (title) { this.logo(ui, 70, 34); ui.text('a Diablo (1996) homage', VIEW_W / 2, 104, { align: 'center', size: 14, color: '#9a7a52' }); }
+  }
+  /** Order 16: the title in Cinzel, blood-red with a dark outline and an ember glow, over a gold rule. */
+  logo(ui: UI, y: number, size: number) {
+    const c = ui.c; c.save(); c.shadowColor = 'rgba(255,60,20,0.6)'; c.shadowBlur = 16;
+    hudText(c, 'CATHEDRAL OF TRISTRAM', VIEW_W / 2, y, { align: 'center', size, color: '#c8281a', weight: 700 }); c.restore();
+    divider(c, VIEW_W / 2 - 200, y + size * 0.62, 400);
   }
   draw(ui: UI, s: Screen, dt: number) {
     this.t += dt;
@@ -28,17 +35,18 @@ export class Screens {
       case 'title': {
         this.bg(ui, false);
         const a = Math.min(1, this.t / 1.5);
-        ui.c.globalAlpha = a; ui.text('CATHEDRAL OF TRISTRAM', VIEW_W / 2, 200, { align: 'center', size: 40, color: '#c03020', bold: true });
+        ui.c.globalAlpha = a; this.logo(ui, 200, 40); ui.c.globalAlpha = a;
         ui.text('The sleeper has awakened...', VIEW_W / 2, 250, { align: 'center', size: 16, color: '#b08860' });
-        ui.c.globalAlpha = 0.5 + 0.5 * Math.sin(this.t * 3); ui.text('Tap to continue', VIEW_W / 2, 400, { align: 'center', size: 14 }); ui.c.globalAlpha = 1;
+        ui.c.globalAlpha = 0.5 + 0.5 * Math.sin(this.t * 3); ui.text('TAP TO CONTINUE', VIEW_W / 2, 400, { align: 'center', size: 14, color: '#d8b058', head: true }); ui.c.globalAlpha = 1;
         ui.area(0, 0, VIEW_W, VIEW_H, () => this.h.go('menu'));
         break;
       }
       case 'menu':
         this.bg(ui);
-        ui.menuItem('Single Player', 170, 210, 300, () => { this.selHero = this.h.heroes()[0] ?? ''; this.h.go('select'); }, { size: 26 });
-        ui.menuItem('Show Credits', 170, 270, 300, () => { this.creditsY = 0; this.h.go('credits'); }, { size: 26 });
-        ui.menuItem('Exit Diablo', 170, 330, 300, () => this.h.go('exit'), { size: 26 });
+        // Order 16: iron plaques, 52 tall (>= 44 css px at the 0.81 front-end scale on 844x390)
+        ui.button('Single Player', 190, 184, 260, 52, () => { this.selHero = this.h.heroes()[0] ?? ''; this.h.go('select'); }, { size: 20, on: true });
+        ui.button('Show Credits', 190, 244, 260, 52, () => { this.creditsY = 0; this.h.go('credits'); }, { size: 20 });
+        ui.button('Exit Diablo', 190, 304, 260, 52, () => this.h.go('exit'), { size: 20 });
         break;
       case 'credits': {
         this.bg(ui, false);
@@ -52,43 +60,44 @@ export class Screens {
       case 'select': {
         this.bg(ui);
         const list = this.h.heroes();
-        ui.panel(40, 130, 260, 300);
-        ui.text('Select Hero', 170, 150, { align: 'center', size: 16, color: '#d8b860' });
-        list.forEach((n, i) => ui.menuItem(n, 40, 182 + i * 28, 260, () => { this.selHero = n; this.confirmDel = false; }, { size: 15, color: this.selHero === n ? '#ffffff' : '#d8b860' }));
-        ui.menuItem('New Hero', 40, 182 + list.length * 28, 260, () => { this.h.go('class'); }, { size: 15, color: '#e8c040' });
-        ui.panel(330, 130, 270, 300);
+        ui.panel(40, 126, 260, 304, 'Select Hero');
+        // rows are 54 tall (44 css px) while they fit; a long hero list tightens to fit the panel
+        const rh = Math.min(54, 238 / (list.length + 1)), r0 = 182 - 28 + rh / 2;
+        list.forEach((n, i) => { const y = r0 + i * rh; if (this.selHero === n) { ui.c.fillStyle = 'rgba(216,176,88,0.16)'; ui.c.fillRect(54, y - rh / 2 + 3, 232, rh - 6); } ui.menuItem(n, 40, y, 260, () => { this.selHero = n; this.confirmDel = false; }, { size: 16, color: this.selHero === n ? '#fff4d8' : '#d8b860', hit: rh }); });
+        ui.menuItem('New Hero', 40, list.length ? r0 + list.length * rh : 182, 260, () => { this.h.go('class'); }, { size: 16, color: '#f0c850', hit: list.length ? rh : 54 });
+        ui.panel(330, 126, 270, 304, 'Hero');
         const hero = this.selHero ? this.h.peek(this.selHero) : null;
         if (hero) {
           const rows: [string, string][] = [['Level', `${hero.clvl}`], ['Strength', `${hero.base.str}`], ['Magic', `${hero.base.mag}`], ['Dexterity', `${hero.base.dex}`], ['Vitality', `${hero.base.vit}`]];
-          ui.text(`${hero.name} - ${CLASSES[hero.cls].name}`, 465, 152, { align: 'center', size: 14, color: '#e8d8a8' });
-          rows.forEach(([a, b], i) => { ui.text(a, 360, 186 + i * 24); ui.text(b, 560, 186 + i * 24, { align: 'right' }); });
-          ui.button('Play', 350, 370, 100, 34, () => this.h.load(hero.name));
-          ui.button(this.confirmDel ? 'Really?' : 'Delete', 480, 370, 100, 34, () => { if (this.confirmDel) { this.h.del(hero.name); this.selHero = ''; this.confirmDel = false; } else this.confirmDel = true; });
+          ui.text(`${hero.name} - ${CLASSES[hero.cls].name}`, 465, 172, { align: 'center', size: 15, color: '#efe0b8', head: true });
+          rows.forEach(([a, b], i) => { ui.text(a.toUpperCase(), 360, 204 + i * 26, { size: 11, color: '#b89c6a', head: true }); well(ui.c, 520, 193 + i * 26, 50, 21); ui.text(b, 545, 204 + i * 26, { align: 'center', size: 13, color: '#efe0b8' }); });
+          ui.button('Play', 350, 364, 110, 46, () => this.h.load(hero.name), { on: true, size: 15 });
+          ui.button(this.confirmDel ? 'Really?' : 'Delete', 470, 364, 110, 46, () => { if (this.confirmDel) { this.h.del(hero.name); this.selHero = ''; this.confirmDel = false; } else this.confirmDel = true; }, { danger: true, size: 15 });
         } else ui.wrap('Choose a hero, or make a new one.', 345, 200, 240, 16, { align: 'center' });
-        ui.button('Back', 40, 440, 100, 30, () => this.h.go('menu'));
+        ui.button('Back', 40, 436, 110, 40, () => this.h.go('menu'), { size: 14 });
         break;
       }
       case 'class': {
         this.bg(ui);
-        ui.text('Choose Class', VIEW_W / 2, 140, { align: 'center', size: 18, color: '#d8b860' });
+        hudText(ui.c, 'CHOOSE CLASS', VIEW_W / 2, 140, { align: 'center', size: 18, color: '#e8c060', weight: 700 });
         (['warrior', 'rogue', 'sorcerer'] as ClassId[]).forEach((id, i) => {
           const c = CLASSES[id], x = 40 + i * 195;
           ui.button('', x, 160, 180, 220, () => { this.cls = id; }, { on: this.cls === id });
-          ui.text(c.name, x + 90, 182, { align: 'center', size: 17, color: '#e8d8a8' });
+          ui.text(c.name.toUpperCase(), x + 90, 184, { align: 'center', size: 17, color: this.cls === id ? '#fff0c0' : '#e8d8a8', head: true }); divider(ui.c, x + 20, 200, 140);
           const rows: [string, number][] = [['Strength', c.base.str], ['Magic', c.base.mag], ['Dexterity', c.base.dex], ['Vitality', c.base.vit]];
-          rows.forEach(([a, b], j) => { ui.text(a, x + 18, 220 + j * 24); ui.text(`${b}`, x + 160, 220 + j * 24, { align: 'right' }); });
-          ui.text({ warrior: 'Skill: Item Repair', rogue: 'Skill: Trap Disarm', sorcerer: 'Skill: Staff Recharge' }[id], x + 90, 330, { align: 'center', size: 11, color: '#9a8a62' });
-          ui.text({ warrior: 'Short sword, buckler, club', rogue: 'Short bow', sorcerer: 'Staff of Charged Bolt, Firebolt' }[id], x + 90, 350, { align: 'center', size: 10, color: '#9a8a62' });
+          rows.forEach(([a, b], j) => { ui.text(a.toUpperCase(), x + 18, 222 + j * 24, { size: 11, color: '#b89c6a', head: true }); ui.text(`${b}`, x + 160, 222 + j * 24, { align: 'right', size: 14, color: '#efe0b8' }); });
+          ui.text({ warrior: 'Skill: Item Repair', rogue: 'Skill: Trap Disarm', sorcerer: 'Skill: Staff Recharge' }[id], x + 90, 330, { align: 'center', size: 12, color: '#b8a070' });
+          ui.text({ warrior: 'Short sword, buckler, club', rogue: 'Short bow', sorcerer: 'Staff of Charged Bolt, Firebolt' }[id], x + 90, 350, { align: 'center', size: 11, color: '#9a8a62' });
         });
-        ui.button('OK', 200, 400, 110, 34, () => { const inp = this.h.nameInput(); inp.value = ''; this.err = ''; this.h.go('name'); this.h.focusName(); });
-        ui.button('Cancel', 330, 400, 110, 34, () => this.h.go('select'));
+        ui.button('OK', 200, 396, 110, 42, () => { const inp = this.h.nameInput(); inp.value = ''; this.err = ''; this.h.go('name'); this.h.focusName(); });
+        ui.button('Cancel', 330, 396, 110, 42, () => this.h.go('select'));
         break;
       }
       case 'name': {
         this.bg(ui);
         // the typed text, caret, OK and Cancel taps belong to the HTML form laid over these boxes (main.ts); the canvas draws the D1 look
-        ui.text(`Enter a name for your ${CLASSES[this.cls].name}`, VIEW_W / 2, 170, { align: 'center', size: 18, color: '#d8b860' });
-        ui.panel(NAME_BOX.x, NAME_BOX.y, NAME_BOX.w, NAME_BOX.h);
+        hudText(ui.c, `ENTER A NAME FOR YOUR ${CLASSES[this.cls].name.toUpperCase()}`, VIEW_W / 2, 170, { align: 'center', size: 16, color: '#e8c060', weight: 700 });
+        well(ui.c, NAME_BOX.x, NAME_BOX.y, NAME_BOX.w, NAME_BOX.h, { border: '#c89a48' });
         if (this.err) ui.text(this.err, VIEW_W / 2, 262, { align: 'center', size: 12, color: '#d04040' });
         ui.button('OK', NAME_OK.x, NAME_OK.y, NAME_OK.w, NAME_OK.h, () => this.submitName());
         ui.button('Cancel', NAME_CANCEL.x, NAME_CANCEL.y, NAME_CANCEL.w, NAME_CANCEL.h, () => this.cancelName());
@@ -96,14 +105,14 @@ export class Screens {
       }
       case 'loading': {
         this.bg(ui, false);
-        ui.text('Loading...', VIEW_W / 2, 220, { align: 'center', size: 22, color: '#d8b860' });
+        hudText(ui.c, 'LOADING', VIEW_W / 2, 220, { align: 'center', size: 22, color: '#e8c060', weight: 700 });
         const f = Math.min(1, this.t / 0.6);
-        ui.c.fillStyle = '#300'; ui.c.fillRect(170, 250, 300, 14); ui.c.fillStyle = '#c03020'; ui.c.fillRect(170, 250, 300 * f, 14);
+        xpBar(ui.c, 170, 252, 300, f);
         break;
       }
       case 'exit':
         this.bg(ui);
-        ui.wrap('Thanks for playing. Close this tab to exit, or tap to return to the menu.', 120, 230, 400, 20, { align: 'center', size: 15 });
+        ui.wrap('Thanks for playing. Close this tab to exit, or tap to return to the menu.', 120, 230, 400, 22, { align: 'center', size: 16 });
         ui.area(0, 0, VIEW_W, VIEW_H, () => this.h.go('menu'));
         break;
       default: break;
