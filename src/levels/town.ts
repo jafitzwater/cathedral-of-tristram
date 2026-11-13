@@ -15,8 +15,17 @@ export const TOWN_W = 96, TOWN_H = 96;
  */
 export const BUILDING_FP: Record<string, [number, number]> = {
   smithy: [3.283, 4.63], pepin_house: [3.933, 2.553], tavern: [5.088, 4.633], adria_hut: [3.1, 3.1], cathedral: [5.284, 4.543],
-  smithy_eave: [2.2, 4.6], well: [1.706, 1.133], fence: [0.08, 0.76], bridge: [3.0, 1.5], tree_a: [2.4, 2.283], tree_b: [2.1, 1.997],
+  well: [1.706, 1.133], fence: [0.08, 0.76], bridge: [3.0, 1.5], tree_a: [2.4, 2.283], tree_b: [2.1, 1.997],
+  // Order 14: the Order 11b set pieces (same convention: footprint_m read as tiles, axes swapped)
+  gillian_house: [1.923, 1.576], farnham_house: [2.562, 2.698], north_house: [2.352, 2.002], nw_house: [2.492, 2.072], se_house: [2.772, 2.769],
+  catacombs_hut: [2.142, 2.002], cave_mouth: [2.31, 3.293], hell_rift: [2.8, 3.043],
+  smithy_eave: [3.61, 1.65], smithy_anvil: [0.582, 0.715], smithy_forge: [0.73, 0.9],
+  stone_wall: [0.45, 1.835], headstone_a: [0.28, 0.5], headstone_b: [0.295, 0.552], headstone_cross: [0.294, 0.577],
+  dead_tree_a: [1.703, 2.133], dead_tree_b: [1.449, 1.918], brush_a: [0.902, 1.057], brush_b: [0.902, 1.057],
+  ditch: [1.12, 1.6], crate: [0.641, 0.641], crate_stack: [0.702, 0.742], cart: [2.04, 1.016], slain_townsman: [2.007, 1.4],
 };
+/** Pieces that never block (collision comes from their tiles or is not wanted): the walk-under eave, the wall run over T.WALL. */
+const NON_SOLID = new Set(['bridge', 'smithy_eave', 'stone_wall', 'slain_townsman']);
 export type Solid = 'footprint' | 'trunk' | 'none';
 /** A placed piece. `id` is the art piece, `role` what it is in this town (several houses reuse one sprite). */
 export interface Building { id: string; role: string; art: string; x: number; y: number; ex: number; ey: number; flip: boolean; solid: Solid; s: number }
@@ -24,7 +33,7 @@ export const HOUSE_SCALE = 1.35, CATHEDRAL_SCALE = 1.6;
 const piece = (id: string, role: string, x: number, y: number, flip = false, s = HOUSE_SCALE): Building => {
   const [fx, fy] = BUILDING_FP[id];
   const [ex, ey] = flip ? [fy * s, fx * s] : [fx * s, fy * s];
-  return { id, role, art: `${id}_full`, x, y, ex, ey, flip, s, solid: id.startsWith('tree') ? 'trunk' : id === 'bridge' || id === 'smithy_eave' ? 'none' : 'footprint' };
+  return { id, role, art: `${id}_full`, x, y, ex, ey, flip, s, solid: id.startsWith('tree') || id.startsWith('dead_tree') ? 'trunk' : NON_SOLID.has(id) ? 'none' : 'footprint' };
 };
 
 /** The 14 points of Joseph's map legend, in engine tiles (where the NPC stands / the entrance is). */
@@ -62,21 +71,35 @@ export const BUILDINGS: Building[] = [
   // Order 13: the smithy moved south-east to the square's SE edge (where the map draws it). Mirrored, its anvil is on the +x side
   // face (the side, away from the door) and its +y face, the visible one toward the square, carries the eave slot below
   piece('smithy', 'smithy', 69, 65.5, true),
-  piece('smithy_eave', 'smithy_eave', 69, 69.2, true),      // Order 11b art slot: renders only once `smithy_eave_full` exists
+  // Order 14: the 11b eave is authored along the art's X (engine x) for a +y face, so unmirrored it sits on the mirrored smithy's
+  // +y face, the one toward the square: 4.87 x 2.23 tiles at x1.35 (the 2.2 x 4.81 of the order), Griswold under it
+  piece('smithy_eave', 'smithy_eave', 69, 68.8),
+  piece('smithy_anvil', 'smithy_anvil', 66, 68, false, 1), // at the building's side corner, not in front of the door
+  piece('smithy_forge', 'smithy_forge', 71, 68, false, 1), // under the eave's far end, beside Griswold
   piece('pepin_house', 'pepin', 48.6, 75.2),               // 4 west edge of the square
-  piece('pepin_house', 'gillian_house', 36.6, 63.1, true), // 7 north-west of the tavern
-  piece('pepin_house', 'farnham_house', 68.5, 87, true),   // 9 the southern house (Order 13: moved S/SE, then nudged SW, off the square)
-  piece('pepin_house', 'north_house', 47.5, 43.3),         // the house north of the tavern
-  piece('adria_hut', 'nw_house', 25.6, 49.4),
-  piece('pepin_house', 'ne_house', 62.4, 57.5, true),      // Order 13: the house NE of the square (was the smithy's spot)
+  piece('gillian_house', 'gillian_house', 36.6, 63.1),     // 7 north-west of the tavern (Order 14: own 11b house, door on the +x face)
+  piece('farnham_house', 'farnham_house', 68.5, 87),       // 9 the southern house (Order 13: moved S/SE, then nudged SW, off the square)
+  piece('north_house', 'north_house', 47.5, 43.3),         // the house north of the tavern
+  piece('nw_house', 'nw_house', 25.6, 49.4),
+  piece('se_house', 'ne_house', 62.4, 57.5),               // the house NE of the square (11b se_house art)
   piece('adria_hut', 'adria', 75, 18.4),                   // 11 across the east stream
-  piece('adria_hut', 'catacombs', 46.4, 19.7, false, 1),   // 12 the catacombs hut (closed)
+  piece('catacombs_hut', 'catacombs', 46.4, 19.7),         // 12 the catacombs hut (closed)
+  piece('cave_mouth', 'caves', 15, 65.6),                  // 2 its opening faces the sealed tile in front
+  piece('hell_rift', 'hell', 41, 77.4),                    // 3
+  piece('slain_townsman', 'slain', 24, 34, false, 1),      // 13 (the Wounded Townsman NPC lies on this tile)
+  // crates and a cart by the square and the tavern
+  piece('crate', 'crate', 44, 61, false, 1), piece('crate_stack', 'crate', 45, 61, false, 1), piece('crate', 'crate', 52, 71, false, 1),
+  piece('cart', 'cart', 66, 74, false, 1), piece('crate_stack', 'crate', 52, 52, false, 1),
+  // ditches along the roads and the south-west edge
+  piece('ditch', 'ditch', 61, 82, false, 1), piece('ditch', 'ditch', 61, 88, false, 1), piece('ditch', 'ditch', 78, 74, true, 1),
+  piece('ditch', 'ditch', 88, 74, true, 1), piece('ditch', 'ditch', 36, 84, false, 1),
   piece('well', 'well', 60, 68),                           // Order 13: in the middle of the open square, by Cain
   piece('bridge', 'bridge_west', 18, 50),                  // to Wirt
   piece('bridge', 'bridge_east', 71, 25),                  // to Adria
   piece('bridge', 'bridge_road', 82, 70.5),                // the south-east road
-  piece('tree_a', 'tree', 33, 44, false, 1), piece('tree_b', 'tree', 66, 48, false, 1), piece('tree_a', 'tree', 40, 72, false, 1),
-  piece('tree_b', 'tree', 30, 10, false, 1), piece('tree_a', 'tree', 72, 84, false, 1),
+  // Order 14: the map's trees are bare: the 11b dead trees replace the leafy 2c ones
+  piece('dead_tree_a', 'tree', 33, 44, false, 1), piece('dead_tree_b', 'tree', 66, 48, false, 1), piece('dead_tree_a', 'tree', 40, 72, false, 1),
+  piece('dead_tree_b', 'tree', 30, 10, false, 1), piece('dead_tree_a', 'tree', 74, 81, false, 1),
 ];
 /** The fenced graveyard east of the cathedral, gate toward the church. */
 export const GRAVEYARD = { x0: 30, y0: 21, x1: 40, y1: 31, gate: [25, 26] };
@@ -118,7 +141,7 @@ export const SQUARE = { x0: 53, y0: 63, x1: 64, y1: 75 };
  * only once the Sprite Director's cow art is in the manifest: anims.cow (action `idle`, 8 facings), frames `cow:idle:<dir>:<i>`,
  * asset in group `town-cow` (loaded with the town) or any town group. Until then nothing is drawn, no stand-in.
  */
-export const COWS: { x: number; y: number; dir: number }[] = [{ x: 51, y: 19, dir: 1 }, { x: 53, y: 21, dir: 6 }, { x: 52, y: 16, dir: 3 }];
+export const COWS: { x: number; y: number; dir: number; phase: number }[] = [{ x: 51, y: 19, dir: 1, phase: 0 }, { x: 53, y: 21, dir: 6, phase: 270 }, { x: 52, y: 16, dir: 3, phase: 530 }];
 export const cowArt = { ready: false }; // set each frame by the renderer when the cow frames are resident
 /** The closed entrances (decorative; later dungeons): obj var1 = their map number. */
 export const SEALED: Record<number, string> = { 2: 'the Caves', 3: 'Hell', 12: 'the Catacombs' };
@@ -136,7 +159,7 @@ export const PATHS: [number, number][][] = [
   [[58, 42], [66, 31], [69, 25]], [[72, 25], [77, 23]],  // portal spot - east bridge - Adria
   [[58, 42], [52, 30], [47, 23]],                        // to the catacombs hut
   [[41, 63], [39, 58], [30, 55], [21, 50]], [[16, 50], [14, 52]], // Gillian - west bridge - Wirt
-  [[15, 52], [16, 60], [15, 66]],                        // Wirt - the caves
+  [[15, 52], [17, 60], [18, 66], [17, 69]],              // Wirt - the caves (round the east side of the cave mound)
   [[52, 78], [47, 80], [43, 80]],                        // Pepin - hell
   [[63, 71], [95, 71]],                                  // road south-east (crosses the east stream on a bridge)
   [[58, 75], [58, 95]],                                  // road south-west
@@ -182,7 +205,6 @@ export function makeTown(): LevelMap & { dress: Dress } {
   for (const [cx, cy, r] of CLEARINGS) for (let y = Math.floor(cy - r); y <= cy + r; y++) for (let x = Math.floor(cx - r); x <= cx + r; x++) if (Math.hypot(x - cx, y - cy) <= r) set(x, y, T.GRASS);
   for (const w of WALLS) line(w, (x, y) => set(x, y, T.WALL));
   // the caves' rock face behind its mouth
-  for (let x = 12; x <= 18; x++) set(x, 65, T.WALL); set(12, 66, T.WALL); set(18, 66, T.WALL);
   for (const s of [WEST_STREAM, EAST_STREAM, EAST_BRANCH]) line(s, (x, y) => { set(x, y, T.WATER); set(x + 1, y, T.WATER); });
   // the square (packed dirt) in the south-centre
   for (let y = SQUARE.y0; y <= SQUARE.y1; y++) for (let x = SQUARE.x0; x <= SQUARE.x1; x++) set(x, y, T.FLOOR);
@@ -197,7 +219,7 @@ export function makeTown(): LevelMap & { dress: Dress } {
   // headstones in the graveyard
   const G = GRAVEYARD;
   for (let y = G.y0 + 2; y < G.y1; y += 2) for (let x = G.x0 + 2; x < G.x1; x += 2) if ((x * 5 + y * 3) % 7 !== 0) m.objects.push(obj('cross', x, y));
-  for (const c of COWS) { set(c.x, c.y, T.GRASS); m.objects.push(obj('cow', c.x, c.y, c.dir)); }
+  for (const c of COWS) { set(c.x, c.y, T.GRASS); m.objects.push({ ...obj('cow', c.x, c.y, c.dir), var2: c.phase }); }
   // the closed entrances
   for (const n of [2, 3, 12]) { const p = POINTS.find((q) => q.n === n)!; set(p.x, p.y, T.GRASS); m.objects.push(obj('sealed', p.x, p.y, n)); }
   // scattered dead trees on open ground, clear of paths, buildings, people and water
@@ -234,3 +256,16 @@ export function nearestOpen(m: LevelMap, walk: (x: number, y: number) => boolean
   for (let ty = 0; ty < m.h; ty++) for (let tx = 0; tx < m.w; tx++) if (r[ty * m.w + tx]) { const d = (tx - x) ** 2 + (ty - y) ** 2; if (d < bd) { bd = d; best = { x: tx, y: ty }; } }
   return best;
 }
+
+/** Order 14: the 11b stone_wall run (about 2 tiles per piece, scale 1) laid over the T.WALL tiles, which keep the collision. */
+export function wallPieces(m: LevelMap): Building[] {
+  const out: Building[] = [], done = new Set<number>(), W = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[y * m.w + x] === T.WALL;
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+    if (!W(x, y) || done.has(y * m.w + x)) continue;
+    done.add(y * m.w + x);
+    if (W(x + 1, y)) { done.add(y * m.w + x + 1); out.push(piece('stone_wall', 'wall', x + 0.5, y, true, 1)); }
+    else out.push(piece('stone_wall', 'wall', x, y, true, 1));
+  }
+  return out;
+}
+BUILDINGS.push(...wallPieces(makeTown()));

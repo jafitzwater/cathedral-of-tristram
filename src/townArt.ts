@@ -2,6 +2,8 @@
 import { TILE_H, tileToScreen } from './iso';
 import type { Building } from './levels/town';
 
+/** Pieces with a roof/base split (D1 roof fade); everything else fades whole. */
+export const ROOFED = ['smithy', 'pepin_house', 'tavern', 'adria_hut', 'cathedral', 'gillian_house', 'farnham_house', 'north_house', 'nw_house', 'se_house', 'catacombs_hut', 'smithy_eave'];
 export const ROOF_FADE = 0.3, BASE_FADE = 0.55, DRESS_FADE = 0.45;
 export interface SpriteBox { ax: number; ay: number; w: number; h: number; eaves?: number }
 /** Hero sprite box relative to the feet point (screen px): the 96 px packed hero is ~40 px wide, ~80 px tall. */
@@ -30,7 +32,7 @@ function overlaps(b: Building, f: SpriteBox, px: number, py: number) {
  */
 export function buildingFade(b: Building, f: SpriteBox, px: number, py: number): { roof: number; base: number } {
   if (!behind(b, px, py) || !overlaps(b, f, px, py)) return { roof: 1, base: 1 };
-  if (f.eaves === undefined || !['smithy', 'pepin_house', 'tavern', 'adria_hut', 'cathedral'].includes(b.id)) return { roof: DRESS_FADE, base: DRESS_FADE };
+  if (f.eaves === undefined || !ROOFED.includes(b.id)) return { roof: DRESS_FADE, base: DRESS_FADE };
   const r = spriteRect(b, f), feetY = tileToScreen(px, py).y + TILE_H / 2;
   return { roof: ROOF_FADE, base: feetY > r.eavesY ? BASE_FADE : 1 };
 }

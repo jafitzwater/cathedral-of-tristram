@@ -2,7 +2,7 @@
 // still loading (or released by the zone groups) a dim silhouette stands in.
 import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './iso';
 import type { NpcDef } from './levels/town';
-import { T, TALL, at } from './levels/types';
+import { T, TALL, WALKABLE, at } from './levels/types';
 import { BUILDINGS, TAVERN_LIGHT, TOWN_PORTAL_SPOT, cowArt, inBrush, type Building, type Dress } from './levels/town';
 import { buildingFade, frontS, sortKey, type SpriteBox } from './townArt';
 import { art, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
@@ -104,13 +104,12 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
         // Order 12: the far-west brush and the edge woods are dense low brush on forest floor; lone trees stand on the grass
         const ring = town && (x < 2 || y < 2 || x > m.w - 3 || y > m.h - 3), brush = town && (ring || inBrush(x, y));
         fa(brush ? T.TREE : T.GRASS, x, y, sx, sy, ring ? seen * 0.45 : seen);
-        if (!brush) drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6);
-        else if ((x + y) % 2 === 0) { // every other tile: the sprites overlap into a solid thicket at half the draw calls
-          const h = hash(x, y);
-          if (ring) c.globalAlpha = 0.55;
-          drawFrame(c, BRUSH[h % BRUSH.length], sx + ((h >> 4) % 9) - 4, sy + TILE_H - 2, 1.45);
-          c.globalAlpha = 1;
-        }
+        // Order 14: lone trees are the 11b dead trees; the west woods are the 11b blue-grey brush (2c art only as a fallback)
+        const h = hash(x, y);
+        if (!brush) { if (!drawFrame(c, h % 2 ? 'dead_tree_a_full' : 'dead_tree_b_full', sx, sy + TILE_H / 2, 1, h % 4 > 1)) drawFrame(c, `bigtree0${1 + ((x * 7 + y * 13) % 3)}`, sx, sy + TILE_H - 4, 1.6); }
+        else if (!(groundDone && bakedBrush(m)[y * m.w + x])) brushSprite(c, x, y, sx, sy, ring);
+      } else if (town && t === T.WALL && hasFrame('stone_wall_full')) {
+        fa(T.GRASS, x, y, sx, sy, seen); // Order 14: the 11b stone_wall pieces (BUILDINGS) stand on these tiles
       } else if (TALL.has(t)) {
         const [top, left, right, hgt] = TALL_COL[t];
         // D1 wall transparency: walls just in front of the hero fade
@@ -173,6 +172,28 @@ function drawPiece(c: CanvasRenderingContext2D, b: Building, cam: { x: number; y
   }
 }
 
+/** A brush clump on a woods tile (11b blue-grey brush; the 2c bushes as a fallback). The edge ring is dimmer and sparser. */
+function brushSprite(c: CanvasRenderingContext2D, x: number, y: number, sx: number, sy: number, ring: boolean) {
+  if (ring && (x + y) % 2) return;
+  const h = hash(x, y);
+  if (ring) c.globalAlpha = 0.5;
+  if (!drawFrame(c, h % 2 ? 'brush_a_full' : 'brush_b_full', sx + ((h >> 4) % 9) - 4, sy + TILE_H / 2 + ((h >> 8) % 5) - 2, 1.3, h % 4 > 1)) drawFrame(c, BRUSH[h % BRUSH.length], sx + ((h >> 4) % 9) - 4, sy + TILE_H - 2, 1.45);
+  c.globalAlpha = 1;
+}
+const baked = new WeakMap<object, Uint8Array>();
+/** Woods tiles with no walkable tile within 4 tiles behind them (toward -x/-y): their sprites can go into the ground cache. */
+function bakedBrush(m: Game['level']['map']): Uint8Array {
+  let b = baked.get(m); if (b) return b;
+  b = new Uint8Array(m.w * m.h);
+  const woods = (x: number, y: number) => { const t = at(m, x, y); return t === T.TREE && (x < 2 || y < 2 || x > m.w - 3 || y > m.h - 3 || inBrush(x, y)); };
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+    if (!woods(x, y)) continue;
+    let ok = true;
+    for (let dy = 0; dy <= 4 && ok; dy++) for (let dx = 0; dx <= 4 && ok; dx++) { const qx = x - dx, qy = y - dy; if (qx >= 0 && qy >= 0 && WALKABLE.has(at(m, qx, qy))) ok = false; }
+    b[y * m.w + x] = ok ? 1 : 0;
+  }
+  baked.set(m, b); return b;
+}
 /** One flat ground tile: floor art (or the flat colour), then the town's tufts and the tavern's glow. */
 function groundTile(c: CanvasRenderingContext2D, m: Game['level']['map'], town: boolean, t: number, x: number, y: number, sx: number, sy: number, seen: number) {
   const [a, b] = FLOOR_COL[t] ?? FLOOR_COL[T.FLOOR];
@@ -205,12 +226,20 @@ function townGround(c: CanvasRenderingContext2D, m: Game['level']['map'], cam: P
       const p = tileToScreen(x, y);
       if (p.x < x0 - TILE_W || p.x > x1 + TILE_W || p.y < y0 - TILE_H * 3 || p.y > y1 + TILE_H) continue;
       const t = at(m, x, y), ring = x < 2 || y < 2 || x > m.w - 3 || y > m.h - 3;
-      const gt = t === T.TREE ? (ring || inBrush(x, y) ? T.TREE : T.GRASS) : t === T.HOUSE ? T.GRASS : t;
-      if (t === T.WALL) continue; // the wall prisms cover their tile
-      if (TALL.has(t) || t === T.HOUSE) ok = floorArt(g2, true, gt, x, y, p.x, p.y, ring ? 0.45 : 1) && ok;
+      const gt = t === T.TREE ? (ring || inBrush(x, y) ? T.TREE : T.GRASS) : t === T.HOUSE || t === T.WALL ? T.GRASS : t;
+      if (t === T.WALL && !hasFrame('stone_wall_full')) continue; // the wall prisms cover their tile
+      if (TALL.has(t) || t === T.HOUSE || t === T.WALL) ok = floorArt(g2, true, gt, x, y, p.x, p.y, ring ? 0.45 : 1) && ok;
       else groundTile(g2, m, true, t, x, y, p.x, p.y, 1);
     }
-    ground = { cv, m, k, x0, y0, x1, y1, ready: ok };
+    // deep brush that no walkable tile stands behind is baked in too, in diagonal order (it can never cover the hero wrongly)
+    const bk = bakedBrush(m);
+    for (let sd = 0; sd < m.w + m.h - 1; sd++) for (let x = Math.max(0, sd - m.h + 1); x <= Math.min(sd, m.w - 1); x++) {
+      const y = sd - x; if (!bk[y * m.w + x]) continue;
+      const p = tileToScreen(x, y);
+      if (p.x < x0 - TILE_W * 2 || p.x > x1 + TILE_W * 2 || p.y < y0 - TILE_H || p.y > y1 + 120) continue;
+      brushSprite(g2, x, y, p.x, p.y, x < 2 || y < 2 || x > m.w - 3 || y > m.h - 3);
+    }
+    ground = { cv, m, k, x0, y0, x1, y1, ready: ok && hasFrame('brush_a_full') === hasFrame('brush_b_full') };
   }
   c.save(); c.setTransform(1, 0, 0, 1, tr.e, tr.f);
   c.drawImage(ground.cv, Math.round((ground.x0 + cam.x) * k), Math.round((ground.y0 + cam.y) * k));
@@ -277,7 +306,8 @@ function drawPlayer(c: CanvasRenderingContext2D, g: Game, a: Actor, cam: P, time
 }
 function drawNpc(c: CanvasRenderingContext2D, g: Game, n: NpcDef, cam: P, sprites: Sprite[], time: number) {
   const p = tileToScreen(n.x, n.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
-  if (n.id === 'wounded') { // no sheet for the dying townsman (not in the art set): a body lying in blood
+  if (n.id === 'wounded' && hasFrame('slain_townsman_full')) { sprites.push({ t: { kind: 'npc', npc: n }, x: x - 30, y: y - 26, w: 60, h: 34, depth: n.x + n.y }); return; } // Order 14: the 11b body piece
+  if (n.id === 'wounded') { // fallback while the buildings atlas is not resident: a body lying in blood
     c.fillStyle = 'rgba(90,10,10,0.8)'; c.beginPath(); c.ellipse(x + 4, y, 26, 10, 0, 0, Math.PI * 2); c.fill();
     c.fillStyle = '#4a3a2e'; c.beginPath(); c.ellipse(x - 2, y - 4, 20, 6, -0.25, 0, Math.PI * 2); c.fill();
     c.fillStyle = '#c8a080'; c.beginPath(); c.arc(x + 18, y - 9, 5, 0, Math.PI * 2); c.fill();
@@ -321,8 +351,13 @@ function drawObj(c: CanvasRenderingContext2D, g: Game, o: Game['level']['map']['
   const p = tileToScreen(o.x, o.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
   c.globalAlpha = g.level.id === 'town' ? 1 : Math.max(0.3, lit);
   if (o.kind === 'cow') { // Order 13: drawn only with the Order 11b cow art; nothing at all until it lands
-    if (drawActor(c, 'cow', 'idle', o.var1, time * 1000 + o.x * 397 + o.y * 131, x, y)) sprites.push({ t: { kind: 'obj', o }, x: x - 40, y: y - 60, w: 80, h: 66, depth: o.x + o.y });
+    // Order 14: each cow on its own phase and a slightly different rate, so the three never idle in step
+    if (drawActor(c, 'cow', 'idle', o.var1, time * 1000 * (0.9 + 0.1 * (o.id % 3)) + o.var2, x, y)) sprites.push({ t: { kind: 'obj', o }, x: x - 36, y: y - 44, w: 72, h: 50, depth: o.x + o.y });
     c.globalAlpha = 1; return;
+  }
+  if (o.kind === 'cross' && drawFrame(c, ['headstone_a_full', 'headstone_b_full', 'headstone_cross_full'][(o.x * 3 + o.y * 5) % 3], x, y, 1)) { c.globalAlpha = 1; return; } // Order 14
+  if (o.kind === 'sealed' && hasFrame(o.var1 === 2 ? 'cave_mouth_full' : o.var1 === 3 ? 'hell_rift_full' : 'catacombs_hut_full')) { // the 11b piece is the entrance
+    c.globalAlpha = 1; sprites.push({ t: { kind: 'obj', o }, x: x - 24, y: y - 30, w: 48, h: 36, depth: o.x + o.y }); return;
   }
   const objArt = o.kind === 'barrel' || o.kind === 'barrel_ex' ? (o.used ? '' : 'barrel_s') : o.kind.startsWith('chest') ? (o.used ? 'chestOpen_s' : 'chestClosed_s') : '';
   if (!(objArt && drawFrame(c, objArt, x, y + 2, o.kind === 'chest3' ? 1.25 : 1))) {

@@ -16,7 +16,7 @@ for (const a of m.assets) {
 for (const f of fs.readdirSync('public/art')) assert.ok(f === 'manifest.json' || f === 'town-layout.json' || m.assets.some((a) => a.file === f), `stray file ${f}`);
 const want = ['shared', 'town-tiles', 'dungeon-tiles', 'town-buildings', 'town-npcs', 'roamers', 'butcher', ...CLASSES.flatMap((c) => [`hero-${c}-town`, `hero-${c}-combat`]), ...ROAMERS.map((r) => `roamer-${r}-combat`)];
 assert.deepEqual(Object.keys(m.groups).sort(), want.sort());
-assert.equal(m.groups['town-npcs'].length, 8, 'all 8 NPC sheets');
+assert.equal(m.groups['town-npcs'].length, 9, 'all 8 NPC sheets + the Order 11b cow');
 assert.equal(m.groups.roamers.length, 4, 'four roamer idle_walk sheets');
 assert.deepEqual(m.groups.butcher.sort(), ['monsters/butcher-combat', 'monsters/butcher-idle_walk']);
 // Order 7 (2c split): town floors/plants + buildings only in town, cathedral floors + Kenney walls only in the dungeon
@@ -104,7 +104,8 @@ const fake = (fail = ''): Loader => async (url) => { await new Promise((r) => se
 const T = { idle: 120, walk: 80, attack: 70, cast: 80, hit: 70, death: 100, talk: 120 } as Record<string, number>;
 for (const [actor, info] of Object.entries(m.anims)) {
   for (const [action, a] of Object.entries(info.actions)) {
-    assert.equal(a.ms, T[action], `${actor} ${action} timing`);
+    if (info.kind === 'animal') assert.ok(a.ms >= 100 && a.ms <= 400, `${actor} ${action} timing`); // Order 14: the cow's slow D1 idle keeps its own rate
+    else assert.equal(a.ms, T[action], `${actor} ${action} timing`);
     const asset = m.assets.find((x) => x.key === a.asset)!;
     for (const dn of DIR_NAME) for (let i = 0; i < a.n; i++) {
       const f = asset.frames!.find((x) => x.id === `${actor}:${action}:${dn}:${i}`);

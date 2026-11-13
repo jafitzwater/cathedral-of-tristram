@@ -6,7 +6,7 @@ import { COWS, SQUARE, cowArt, BUILDINGS, BUILDING_FP, CATHEDRAL_DOOR, CATHEDRAL
 import { T, WALKABLE, at } from '../src/levels/types';
 import { tileToScreen } from '../src/iso';
 import { findPath } from '../src/path';
-import { BASE_FADE, ROOF_FADE, behind, buildingFade, frontS, sortKey, spriteRect, type SpriteBox } from '../src/townArt';
+import { ROOFED, BASE_FADE, ROOF_FADE, behind, buildingFade, frontS, sortKey, spriteRect, type SpriteBox } from '../src/townArt';
 import { groupsMiB, wantedGroups, BUDGET_MIB, type ArtManifest } from '../src/art';
 import { Game } from '../src/game';
 import { loadGame, saveGame } from '../src/save';
@@ -67,7 +67,7 @@ assert.equal(cat.s, CATHEDRAL_SCALE);
 // ---- footprints ----
 for (const [id, fp] of Object.entries(BUILDING_FP)) {
   const f = atlas.frames!.find((q) => q.id === `${id}_full`)!;
-  if (id === 'smithy_eave') { assert.ok(!f, 'eave art not landed yet: slot only'); continue; }
+  assert.ok(f, `${id}_full in the atlas`);
   assert.deepEqual(fp, [f.fp_m![1], f.fp_m![0]], `${id} footprint = footprint_m`);
   assert.ok((fp[0] + fp[1]) * 32 <= f.w * 1.1, `${id}: ground fits sprite`);
 }
@@ -178,12 +178,12 @@ assert.equal(buildingFade(sm, fs_, sm.x - sm.ex / 2 - 1, sm.y - sm.ey / 2 - 1).r
 assert.equal(buildingFade(sm, fs_, sm.x - sm.ex / 2 - 0.6, sm.y).base, BASE_FADE, 'feet below the eaves: walls fade too');
 assert.ok(behind(cat, cat.x, cat.y - cat.ey / 2 - 1) && !behind(cat, CATHEDRAL_DOOR.x, CATHEDRAL_DOOR.y), 'stairs in front of the cathedral');
 assert.equal(buildingFade(cat, F(cat), CATHEDRAL_DOOR.x, CATHEDRAL_DOOR.y).roof, 1, 'no fade at the door');
-for (const b of BUILDINGS.filter((q) => ['smithy', 'pepin_house', 'tavern', 'adria_hut', 'cathedral'].includes(q.id))) {
+for (const b of BUILDINGS.filter((q) => ROOFED.includes(q.id) && q.id !== 'smithy_eave')) {
   const x = Math.ceil(b.x - b.ex / 2) - 1, y = Math.round(b.y);
   assert.equal(buildingFade(b, F(b), x, y).roof, ROOF_FADE, `${b.role} roof fades with the hero at ${x},${y}`);
   const r = spriteRect(b, F(b)); assert.ok(r.eavesY > r.y0 && r.eavesY < r.y1, `${b.role} eaves inside sprite`);
 }
-const pcs = BUILDINGS.filter((b) => b.id !== 'smithy_eave').map((b) => ({ b, f: F(b) }));
+const pcs = BUILDINGS.map((b) => ({ b, f: F(b) }));
 const gr = pt('griswold');
 assert.ok(sortKey(gr.x + gr.y, gr.x, gr.y, pcs) >= gr.x + gr.y && (gr.x + gr.y < frontS(sm) ? sortKey(gr.x + gr.y, gr.x, gr.y, pcs) > frontS(sm) : true), 'Griswold drawn over the smithy');
 assert.ok(sortKey(sm.x - 4 + sm.y, sm.x - 4, sm.y, pcs) < frontS(sm), 'behind stays behind');
@@ -212,13 +212,40 @@ const cat12 = pt('catacombs'), cows = t.objects.filter((o) => o.kind === 'cow');
 assert.equal(cows.length, 3); assert.deepEqual(cows.map((o) => ({ x: o.x, y: o.y })), COWS.map((c) => ({ x: c.x, y: c.y })));
 for (const o of cows) { assert.ok(east(o, cat12) && Math.hypot(o.x - cat12.x, o.y - cat12.y) < 9, 'cow just east of 12'); assert.ok(!g.tileWalk(o.x, o.y), 'cow blocks'); assert.ok(reach(o), 'cow reachable'); }
 assert.ok(wantedGroups('town', 'warrior').includes('town-cow'), 'the town loads the cow group');
-assert.ok(!man.anims.cow, 'no cow art yet (Order 11b)');
+const cowA = man.anims.cow;
+assert.ok(cowA && cowA.actions.idle.n >= 2, 'Order 11b cow idle loop imported');
+const cowAsset = man.assets.find((a) => a.key === cowA.actions.idle.asset)!;
+assert.ok(['town-npcs', 'town-cow'].includes(cowAsset.group) && wantedGroups('town', 'warrior').includes(cowAsset.group) && cowAsset.license.startsWith('CC0'), 'cow atlas loads with the town, CC0');
+for (const d of ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw']) assert.ok(cowAsset.frames!.some((f) => f.id === `cow:idle:${d}:0`), `cow facing ${d}`);
+// out of sync: distinct phases and rates (render: time * (0.9 + 0.1 * (id % 3)) + var2)
+const loop = cowA.actions.idle.n * cowA.actions.idle.ms, frameAt = (o: { id: number; var2: number }, tms: number) => Math.floor(((tms * (0.9 + 0.1 * (o.id % 3)) + o.var2) % loop) / cowA.actions.idle.ms);
+let same = 0; for (let tms = 0; tms < 20000; tms += 50) { const f = cows.map((o) => frameAt(o, tms)); if (f[0] === f[1] && f[1] === f[2]) same++; }
+assert.ok(same < 400 * 0.2, `cows rarely in step (${same}/400)`);
+assert.ok(new Set(cows.map((o) => o.id % 3)).size === 3 && new Set(cows.map((o) => o.var2)).size === 3, 'three phases and rates');
 const cg = new Game('C', 'warrior', 5);
 Object.assign(cg.p, { x: cows[0].x - 1, y: cows[0].y + 1, tx: cows[0].x - 1, ty: cows[0].y + 1 });
 cowArt.ready = false; assert.notEqual(cg.interaction()?.label, 'Cow', 'no cow interaction while the art is missing');
 cowArt.ready = true; const ci = cg.interaction(); assert.equal(ci?.label, 'Cow', 'tap line "Cow" once drawn');
 cg.interact(); for (let i = 0; i < 10; i++) cg.update(0.05); assert.equal(cg.msg, 'Cow');
 cowArt.ready = false;
+
+// ---- Order 14: the 11b set pieces replace every Order 12 stand-in ----
+const roleArt = (role: string) => BUILDINGS.filter((b) => b.role === role).map((b) => b.id);
+assert.deepEqual([B('gillian_house').id, B('farnham_house').id, B('north_house').id, B('nw_house').id, B('ne_house').id], ['gillian_house', 'farnham_house', 'north_house', 'nw_house', 'se_house'], 'own 11b houses');
+assert.deepEqual([B('catacombs').id, B('caves').id, B('hell').id], ['catacombs_hut', 'cave_mouth', 'hell_rift']);
+for (const id of ['caves', 'hell', 'catacombs']) { const b = B(id), p = pt(id); assert.ok(!footprintTiles(b).some((q) => q.x === p.x && q.y === p.y) && Math.hypot(p.x - b.x, p.y - b.y) < 4, `${id}: sealed tile right in front of its piece`); }
+const wallTiles: string[] = []; for (let y = 0; y < 96; y++) for (let x = 0; x < 96; x++) if (at(t, x, y) === T.WALL) wallTiles.push(`${x},${y}`);
+const walls = BUILDINGS.filter((b) => b.id === 'stone_wall');
+assert.ok(wallTiles.length > 40 && wallTiles.every((k) => { const [x, y] = k.split(',').map(Number); return walls.some((w) => Math.abs(w.x - x) <= 0.5 && w.y === y); }), 'every wall tile under a stone_wall piece');
+assert.ok(BUILDINGS.filter((b) => b.id === 'ditch').length >= 4 && BUILDINGS.filter((b) => b.id === 'crate' || b.id === 'crate_stack').length >= 3 && roleArt('cart').length >= 1, 'ditches, crates and a cart');
+for (const b of BUILDINGS.filter((q) => ['ditch', 'crate', 'crate_stack', 'cart', 'smithy_anvil', 'smithy_forge'].includes(q.id))) assert.ok(footprintTiles(b).length >= 1 && footprintTiles(b).every((q) => !g.tileWalk(q.x, q.y)), `${b.id} blocks`);
+assert.ok(BUILDINGS.filter((b) => b.role === 'tree').every((b) => b.id.startsWith('dead_tree')), 'bare trees');
+const sl = B('slain'); assert.ok(sl.id === 'slain_townsman' && sl.x === wd.x && sl.y === wd.y, 'slain_townsman on point 13');
+const anv = B('smithy_anvil'), frg = B('smithy_forge');
+assert.ok(anv.y > smi.y + smi.ey / 2 && Math.abs(anv.x - (smi.x - smi.ex / 2)) < 1.5, 'anvil at the smithy\'s side corner');
+assert.ok(Math.abs(frg.x - eave.x) <= eave.ex / 2 && Math.abs(frg.y - eave.y) <= eave.ey / 2, 'forge under the eave');
+assert.ok(Math.abs(eave.ex - 4.87) < 0.05 && Math.abs(eave.ey - 2.23) < 0.05 && !eave.flip, `eave footprint ${eave.ex.toFixed(2)} x ${eave.ey.toFixed(2)} (2.2 x 4.81 spec)`);
+assert.ok(Math.abs(eave.y - eave.ey / 2 - (smi.y + smi.ey / 2)) < 0.15, 'eave against the smithy\'s +y face');
 
 // ---- memory ----
 const town: Record<string, number> = {};
