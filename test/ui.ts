@@ -20,8 +20,7 @@ ui.areaMin(0, 0, 100, 80, () => {}); assert.ok(ui.boxes[1].w > 44 && ui.boxes[1]
 const hud = fs.readFileSync('src/hud.ts', 'utf8');
 const atk = hud.slice(hud.indexOf('    // ATTACK\n'), hud.indexOf('    // class skill\n'));
 assert.ok(atk.length > 50 && !/sweep\(/.test(atk), 'no cooldown sweep on ATTACK');
-// node (tests) and live builds use the live namespace; the staging build sets its own via .env
+// Order 19: production save key again (the staging .env is gone)
 assert.equal(SAVE_NS, 'cot.');
-const env = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf8') : '';
-assert.ok(/VITE_SAVE_NS=cot-staging\./.test(env), 'staging builds keep their own save namespace');
-console.log('ui: OK (44 px targets, <=150 ms transitions, ATTACK has no cooldown visual, staging save namespace)');
+assert.ok(!fs.existsSync('.env') || !/VITE_SAVE_NS/.test(fs.readFileSync('.env', 'utf8')), 'no staging save namespace');
+console.log('ui: OK (44 px targets, <=150 ms transitions, ATTACK has no cooldown visual, production save key)');

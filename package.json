@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
-    "test": "tsx test/iso.ts && tsx test/path.ts && tsx test/data.ts && tsx test/formulas.ts && tsx test/levelgen.ts && tsx test/save.ts && tsx test/controls.ts && tsx test/art.ts && tsx test/walls.ts && tsx test/town.ts && tsx test/name.ts && tsx test/joystick.ts && tsx test/bugs.ts && tsx test/updates.ts && tsx test/ui.ts",
+    "test": "tsx test/iso.ts && tsx test/path.ts && tsx test/data.ts && tsx test/formulas.ts && tsx test/levelgen.ts && tsx test/save.ts && tsx test/controls.ts && tsx test/art.ts && tsx test/walls.ts && tsx test/town.ts && tsx test/name.ts && tsx test/joystick.ts && tsx test/bugs.ts && tsx test/updates.ts && tsx test/ui.ts && tsx test/livesave.ts",
     "deploy": "bash scripts/deploy.sh"
   },
   "devDependencies": {

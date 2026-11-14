@@ -11,7 +11,9 @@ export const view = { w: 640, h: PLAY_H, zoom: 1 };
  * Order 10 U3: the zoom out from Order 9's D1-area zoom (sqrt(W*H / 640x352), min 1). The order asked for about /1.35 AND a
  * hero about 70 px tall on 844x390; measured, /1.35 gives an 87 px hero (Order 9 was 117 px), so 1.62 is used: 72 px.
  */
-export const ZOOM_OUT = 1.62;
+export const ZOOM_OUT = 1.21;
+// Order 19: the Phase B art stands 88 px sole-to-crown (was 96), and Joseph's target is a hero ~85-90 px tall on 844x390,
+// so 1.62 -> 1.21: zoom 0.999 at 844x390 (an 88 px hero, 844x390 world px on screen: still wider than D1's 640x352).
 export function worldZoom(W: number, H: number) { return Math.max(1, Math.sqrt((W * H) / (640 * 352))) / ZOOM_OUT; }
 
 export interface P { x: number; y: number }

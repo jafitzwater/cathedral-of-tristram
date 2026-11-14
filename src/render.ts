@@ -349,10 +349,13 @@ function drawPlayer(c: CanvasRenderingContext2D, g: Game, a: Actor, cam: P, time
   const p = tileToScreen(a.x, a.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
   const cls = g.hero.cls, h = heightOf(cls, 96);
   const pose = g.dead ? { action: 'death', ms: stateClock(a, 'dead', time, 0).ms } : actorPose(a, time);
+  // Order 17b/19: the relaxed town idle in town; outside town the ready (dungeon) stance, which attack and cast start from
+  if (pose.action === 'idle' && g.cur !== 'town') pose.action = 'ready';
   shadow(c, x, y, h);
   if (!drawActor(c, cls, pose.action, a.dir, pose.ms, x, y, pose.progress)) {
-    // combat sheet still decoding: stand in with the town sheet's idle, else the silhouette
-    if (!drawActor(c, cls, a.state === 'walk' ? 'walk' : 'idle', a.dir, time * 1000, x, y)) silhouette(c, x, y, h);
+    // sheet still decoding (or not loaded in this zone): stand in with what is resident, else the silhouette
+    const alt = a.state === 'walk' ? ['walk'] : ['idle', 'ready', 'walk'];
+    if (!alt.some((act) => drawActor(c, cls, act, a.dir, act === 'walk' && a.state !== 'walk' ? 0 : time * 1000, x, y))) silhouette(c, x, y, h);
   }
 }
 function drawNpc(c: CanvasRenderingContext2D, g: Game, n: NpcDef, cam: P, sprites: Sprite[], time: number) {
@@ -370,7 +373,8 @@ function drawNpc(c: CanvasRenderingContext2D, g: Game, n: NpcDef, cam: P, sprite
   const dir = talking || Math.max(Math.abs(g.p.x - n.x), Math.abs(g.p.y - n.y)) <= 3 ? Math.max(0, dirOf(Math.round(g.p.x) - n.x, Math.round(g.p.y) - n.y)) : n.face ? Math.max(0, dirOf(n.face.x, n.face.y)) : 0;
   const ms = time * 1000 + (n.x * 37 + n.y * 11) * 10;
   shadow(c, x, y, h);
-  if (!drawActor(c, n.id, talking ? 'talk' : 'idle', dir, ms, x, y)) silhouette(c, x, y, h);
+  // Order 19: the talk atlas loads only while its conversation is open; until it is decoded the NPC keeps its idle
+  if (!(talking && drawActor(c, n.id, 'talk', dir, ms, x, y)) && !drawActor(c, n.id, 'idle', dir, ms, x, y)) silhouette(c, x, y, h);
   sprites.push({ t: { kind: 'npc', npc: n }, x: x - 18, y: y - h * 0.9, w: 36, h: h * 0.9 + 4, depth: n.x + n.y });
 }
 function drawMon(c: CanvasRenderingContext2D, g: Game, mo: Game['level']['monsters'][number], cam: P, sprites: Sprite[], lit: number, time: number) {

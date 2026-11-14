@@ -92,9 +92,10 @@ export function deserialize(s: SaveData): Game {
   return g;
 }
 
-/** Order 16: storage namespace. The staging branch builds with VITE_SAVE_NS=cot-staging. (.env), so a staging
- *  build never reads or writes live saves; main (live) has no such file and keeps 'cot.'. The save format is unchanged. */
-export const SAVE_NS: string = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_SAVE_NS) || 'cot.';
+/** Storage namespace: the production key. Order 16 built staging under 'cot-staging.' (via .env); Order 19 promoted staging
+ *  and went back to 'cot.' (fixed, not env-driven, so no build can drift off the live saves). The save format (v1) is unchanged
+ *  since the live Order 11c build, so live saves load as they are (test/livesave.ts). */
+export const SAVE_NS = 'cot.';
 const KEY = (name: string) => `${SAVE_NS}save.${name}`;
 export function listHeroes(st: Storage): string[] {
   try { return JSON.parse(st.getItem(`${SAVE_NS}heroes`) ?? '[]'); } catch { return []; }
