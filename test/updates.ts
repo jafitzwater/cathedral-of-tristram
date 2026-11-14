@@ -199,10 +199,10 @@ const bare = (cls: 'warrior' | 'rogue' | 'sorcerer' = 'warrior'): Hero => {
   assert.deepEqual(walls.map((r) => r.sides), [false, true], 'walls and columns only (corners/columns get side rims)');
 }
 
-// ---- U3: zoomed out; the hero (97 px opaque idle frame) is about 70 px tall on 844x390 ----
+// ---- U3 / Order 19: the Phase B hero (88 px sole-to-crown art) is 85-90 css px tall on 844x390 ----
 {
-  const z = worldZoom(844, 390), hero = 97 * z;
-  assert.ok(hero >= 65 && hero <= 78, `hero ${hero.toFixed(1)} css px at zoom ${z.toFixed(3)}`);
+  const z = worldZoom(844, 390), hero = 88 * z;
+  assert.ok(hero >= 85 && hero <= 90, `hero ${hero.toFixed(1)} css px at zoom ${z.toFixed(3)}`);
   assert.ok(worldZoom(932, 430) > z, 'bigger phone, same hero share of the screen');
 }
 

@@ -92,14 +92,18 @@ export function deserialize(s: SaveData): Game {
   return g;
 }
 
-const KEY = (name: string) => `cot.save.${name}`;
+/** Storage namespace: the production key. Order 16 built staging under 'cot-staging.' (via .env); Order 19 promoted staging
+ *  and went back to 'cot.' (fixed, not env-driven, so no build can drift off the live saves). The save format (v1) is unchanged
+ *  since the live Order 11c build, so live saves load as they are (test/livesave.ts). */
+export const SAVE_NS = 'cot.';
+const KEY = (name: string) => `${SAVE_NS}save.${name}`;
 export function listHeroes(st: Storage): string[] {
-  try { return JSON.parse(st.getItem('cot.heroes') ?? '[]'); } catch { return []; }
+  try { return JSON.parse(st.getItem(`${SAVE_NS}heroes`) ?? '[]'); } catch { return []; }
 }
 export function saveGame(st: Storage, g: Game) {
   st.setItem(KEY(g.hero.name), JSON.stringify(serialize(g)));
   const l = listHeroes(st);
-  if (!l.includes(g.hero.name)) { l.push(g.hero.name); st.setItem('cot.heroes', JSON.stringify(l)); }
+  if (!l.includes(g.hero.name)) { l.push(g.hero.name); st.setItem(`${SAVE_NS}heroes`, JSON.stringify(l)); }
 }
 export function loadGame(st: Storage, name: string): Game | null {
   const raw = st.getItem(KEY(name));
@@ -112,5 +116,5 @@ export function peekHero(st: Storage, name: string): Hero | null {
 }
 export function deleteHero(st: Storage, name: string) {
   st.removeItem(KEY(name));
-  st.setItem('cot.heroes', JSON.stringify(listHeroes(st).filter((n) => n !== name)));
+  st.setItem(`${SAVE_NS}heroes`, JSON.stringify(listHeroes(st).filter((n) => n !== name)));
 }

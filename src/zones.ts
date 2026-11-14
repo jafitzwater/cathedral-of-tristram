@@ -3,6 +3,7 @@
 import { MON_ART, ROAMERS, wantedGroups, type Zone } from './art';
 
 export interface ZoneView {
+  dialog?: { npc: { id: string } } | null;
   cur: string; hero: { cls: string }; p: { tx: number; ty: number };
   level: { map: { butcherRoom: { x: number; y: number; w: number; h: number } | null }; monsters: { def: { id: string }; alive: boolean; active: boolean; tx: number; ty: number; deathT: number }[] };
 }
@@ -17,7 +18,7 @@ export class ZoneTracker {
   private idle = 0; private out = 0;
   update(g: ZoneView | null, dt: number): string[] {
     if (!g) { this.zone = 'menu'; this.engaged = null; return wantedGroups('menu', null); }
-    if (g.cur === 'town') { this.zone = 'town'; this.engaged = null; return wantedGroups('town', g.hero.cls); }
+    if (g.cur === 'town') { this.zone = 'town'; this.engaged = null; return wantedGroups('town', g.hero.cls, null, g.dialog?.npc.id ?? null); }
     const p = g.p, d = (m: { tx: number; ty: number }) => Math.max(Math.abs(m.tx - p.tx), Math.abs(m.ty - p.ty));
     // Butcher room: loaded on entry (hero inside the room or its walls/door), or while the awake Butcher is chasing close by.
     const br = g.level.map.butcherRoom;

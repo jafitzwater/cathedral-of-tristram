@@ -14,7 +14,7 @@ for (const a of m.assets) {
   assert.ok(!a.file.includes('review'), 'nothing from review/');
 }
 for (const f of fs.readdirSync('public/art')) assert.ok(f === 'manifest.json' || f === 'town-layout.json' || m.assets.some((a) => a.file === f), `stray file ${f}`);
-const want = ['shared', 'town-tiles', 'dungeon-tiles', 'town-buildings', 'town-npcs', 'roamers', 'butcher', ...CLASSES.flatMap((c) => [`hero-${c}-town`, `hero-${c}-combat`]), ...ROAMERS.map((r) => `roamer-${r}-combat`)];
+const want = ['shared', 'town-tiles', 'dungeon-tiles', 'town-buildings', 'town-npcs', 'roamers', 'butcher', ...CLASSES.flatMap((c) => [`hero-${c}-idle`, `hero-${c}-walk`, `hero-${c}-combat`]), ...['adria', 'cain', 'farnham', 'gillian', 'griswold', 'ogden', 'pepin', 'wirt'].map((n) => `npc-${n}-talk`), ...ROAMERS.map((r) => `roamer-${r}-combat`)];
 assert.deepEqual(Object.keys(m.groups).sort(), want.sort());
 assert.equal(m.groups['town-npcs'].length, 9, 'all 8 NPC sheets + the Order 11b cow');
 assert.equal(m.groups.roamers.length, 4, 'four roamer idle_walk sheets');
@@ -84,7 +84,7 @@ const fake = (fail = ''): Loader => async (url) => { await new Promise((r) => se
 }
 {
   // a failed atlas leaves its frames absent (callers draw the fallback silhouette) without breaking the rest
-  const s = new ArtStore('/', fake('warrior-town')); s.init(m);
+  const s = new ArtStore('/', fake('warrior-idle')); s.init(m);
   await s.setGroups(wantedGroups('town', 'warrior'));
   assert.equal(s.errors, 1); assert.equal(s.frame('warrior:idle:s:0'), null); assert.ok(s.frame('griswold:idle:s:0'));
   // global store + drawActor: false before load (fallback), true and anchored after
@@ -101,7 +101,7 @@ const fake = (fail = ''): Loader => async (url) => { await new Promise((r) => se
 }
 
 // ---- anchors and timings ----
-const T = { idle: 120, walk: 80, attack: 70, cast: 80, hit: 70, death: 100, talk: 120 } as Record<string, number>;
+const T = { idle: 120, ready: 120, walk: 80, attack: 70, cast: 80, hit: 70, death: 100, talk: 120 } as Record<string, number>;
 for (const [actor, info] of Object.entries(m.anims)) {
   for (const [action, a] of Object.entries(info.actions)) {
     if (info.kind === 'animal') assert.ok(a.ms >= 100 && a.ms <= 400, `${actor} ${action} timing`); // Order 14: the cow's slow D1 idle keeps its own rate
@@ -111,17 +111,35 @@ for (const [actor, info] of Object.entries(m.anims)) {
       const f = asset.frames!.find((x) => x.id === `${actor}:${action}:${dn}:${i}`);
       assert.ok(f, `${actor}:${action}:${dn}:${i}`);
       assert.ok(f.x >= 0 && f.y >= 0 && f.x + f.w <= asset.w && f.y + f.h <= asset.h, `${f.id} inside atlas`);
-      if (action === 'idle' || action === 'walk' || action === 'talk') {
+      if (action === 'idle' || action === 'ready' || action === 'walk' || action === 'talk') {
         assert.ok(f.ax >= 0 && f.ax <= f.w, `${f.id} feet x inside frame (${f.ax} of ${f.w})`);
         assert.ok(f.ay >= f.h - 16 && f.ay <= f.h + 12, `${f.id} feet y at the bottom (${f.ay} of ${f.h})`);
       }
     }
   }
 }
-// standing heights: hero/NPC 96, roamers D1-relative and smaller, Butcher bigger
-for (const a of ['warrior', 'rogue', 'sorcerer', 'griswold', 'cain']) assert.equal(m.anims[a].height, 96);
-for (const r of ROAMERS) assert.ok(m.anims[r].height < 96, r);
-assert.ok(m.anims.butcher.height > 96);
+// Order 19 standing heights (Phase B, not shrunk): adults 88, Wirt 70 (a boy), Farnham 63 (sitting); roamers smaller, Butcher bigger
+for (const a of ['warrior', 'rogue', 'sorcerer', 'griswold', 'cain', 'ogden', 'pepin', 'adria', 'gillian']) assert.equal(m.anims[a].height, 88, a);
+assert.equal(m.anims.wirt.height, 70); assert.equal(m.anims.farnham.height, 63);
+for (const r of ROAMERS) assert.ok(m.anims[r].height < 88, r);
+assert.ok(m.anims.butcher.height > 88);
+// Order 19: heroes have the relaxed town idle and the ready (dungeon) idle; attack/cast/hit/death live in the combat atlas with ready
+for (const c of CLASSES) {
+  const A = m.anims[c].actions;
+  assert.equal(A.idle.asset, `heroes/${c}-idle`); assert.equal(A.walk.asset, `heroes/${c}-walk`);
+  for (const k of ['ready', 'attack', 'cast', 'hit', 'death']) assert.equal(A[k].asset, `heroes/${c}-combat`, `${c} ${k}`);
+}
+// split-loading contract: one hero; town = its idle + walk + every NPC idle + the cow + at most one talk; dungeon = walk + combat
+for (const c of CLASSES) {
+  const t = wantedGroups('town', c), d = wantedGroups('cathedral', c), b = wantedGroups('butcher', c);
+  assert.ok(t.includes(`hero-${c}-idle`) && t.includes(`hero-${c}-walk`) && !t.includes(`hero-${c}-combat`) && !t.some((g) => g.startsWith('npc-')));
+  for (const z of [d, b]) assert.ok(z.includes(`hero-${c}-walk`) && z.includes(`hero-${c}-combat`) && !z.includes(`hero-${c}-idle`) && !z.includes('town-npcs'));
+  for (const o of CLASSES) if (o !== c) assert.ok(![...t, ...d, ...b].some((g) => g.startsWith(`hero-${o}-`)), 'only the active hero');
+  assert.deepEqual(wantedGroups('town', c, null, 'cain').filter((g) => g.startsWith('npc-')), ['npc-cain-talk']);
+  assert.ok(m.groups['town-npcs'].every((k) => !k.endsWith('-talk')), 'idles only in the resident NPC group');
+  for (const n of ['adria', 'cain', 'farnham', 'gillian', 'griswold', 'ogden', 'pepin', 'wirt']) assert.ok(groupsMiB(m, wantedGroups('town', c, null, n)) <= BUDGET_MIB, `${c} town talking to ${n}`);
+}
+console.log(`town worst while talking: ${Math.max(...CLASSES.flatMap((c) => ['adria', 'cain', 'farnham', 'gillian', 'griswold', 'ogden', 'pepin', 'wirt'].map((n) => groupsMiB(m, wantedGroups('town', c, null, n))))).toFixed(3)} MiB`);
 // timed actions spread over the game's D1 duration, loops at manifest timing, death holds its last frame
 assert.equal(animIndex({ n: 16, ms: 70, asset: '' }, 'attack', 0, 0.999), 15);
 assert.equal(animIndex({ n: 8, ms: 80, asset: '' }, 'walk', 80 * 9, undefined), 1);
@@ -133,6 +151,8 @@ assert.equal(animIndex({ n: 15, ms: 100, asset: '' }, 'death', 99999), 14);
   const g: ZoneView = { cur: 'town', hero: { cls: 'rogue' }, p: { tx: 10, ty: 10 }, level: { map: { butcherRoom: { x: 30, y: 30, w: 8, h: 8 } }, monsters: [] } };
   const z = new ZoneTracker();
   assert.deepEqual(z.update(g, 0.1), wantedGroups('town', 'rogue'));
+  g.dialog = { npc: { id: 'griswold' } }; assert.ok(z.update(g, 0.1).includes('npc-griswold-talk'), 'talk atlas while talking');
+  g.dialog = null; assert.ok(!z.update(g, 0.1).includes('npc-griswold-talk'), 'released when the conversation closes');
   g.cur = 'l1'; assert.deepEqual(z.update(g, 0.1), wantedGroups('cathedral', 'rogue'));
   g.level.monsters = [mon('zombie', 12, 10), mon('fallen_sword', 11, 11)];
   z.update(g, 0.1); assert.equal(z.engaged, 'fallen', 'nearest engaged type');

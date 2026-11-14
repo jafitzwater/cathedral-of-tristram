@@ -19,14 +19,20 @@ export type Zone = 'menu' | 'town' | 'cathedral' | 'butcher';
 export const MON_ART: Record<string, string> = { zombie: 'zombie', fallen: 'fallen', fallen_sword: 'fallen', skeleton: 'skeleton', skeleton_captain: 'skeleton', scavenger: 'scavenger', butcher: 'butcher' };
 export const ROAMERS = ['zombie', 'fallen', 'skeleton', 'scavenger'];
 
-/** The addendum's lazy groups. `engaged` is the one roamer type whose combat atlas may be resident. */
-export function wantedGroups(zone: Zone, cls: string | null, engaged: string | null = null): string[] {
+/**
+ * The addendum's lazy groups. `engaged` is the one roamer type whose combat atlas may be resident.
+ * Order 19 (Phase B split-loading contract, RECIPE.md): only the active hero; in town its idle + walk, every NPC idle (+ the cow)
+ * and at most one NPC talk atlas (`talk`, while that conversation is open); in the dungeon its walk + combat (the ready/dungeon
+ * idle lives in the combat atlas), never the town idle or the town NPCs.
+ */
+export function wantedGroups(zone: Zone, cls: string | null, engaged: string | null = null, talk: string | null = null): string[] {
   const g = ['shared'];
   if (zone === 'menu' || !cls) return g;
-  g.push(`hero-${cls}-town`);
-  if (zone === 'town') g.push('town-tiles', 'town-buildings', 'town-npcs', 'town-cow'); // Order 13: town-cow is empty until the Order 11b cow lands
-  else {
-    g.push('dungeon-tiles', `hero-${cls}-combat`);
+  if (zone === 'town') {
+    g.push(`hero-${cls}-idle`, `hero-${cls}-walk`, 'town-tiles', 'town-buildings', 'town-npcs', 'town-cow');
+    if (talk) g.push(`npc-${talk}-talk`);
+  } else {
+    g.push(`hero-${cls}-walk`, 'dungeon-tiles', `hero-${cls}-combat`);
     if (zone === 'butcher') g.push('butcher');
     else { g.push('roamers'); if (engaged) g.push(`roamer-${engaged}-combat`); }
   }
@@ -64,9 +70,18 @@ export class ArtStore {
     this.want = keys;
     for (const [k, ac] of this.pending) if (!keys.has(k)) { ac.abort(); this.pending.delete(k); }
     for (const [k, r] of this.res) if (!keys.has(k)) { r.d.close(); this.res.delete(k); this.bytes -= r.bytes; this.releases++; }
-    const jobs: Promise<void>[] = [];
-    for (const k of keys) if (!this.res.has(k) && !this.pending.has(k)) jobs.push(this.load(k));
-    return Promise.all(jobs).then(() => undefined);
+    // Order 19: assets with a post-decode pass (the walls) decode first, on their own, so their transient extra copies never
+    // stack on top of the big hero combat atlas (sorcerer cathedral is within ~1 MiB of the budget)
+    const todo = [...keys].filter((k) => !this.res.has(k) && !this.pending.has(k));
+    const first = todo.filter((k) => this.post.has(k)), rest = todo.filter((k) => !this.post.has(k));
+    if (!first.length) return Promise.all(rest.map((k) => this.load(k))).then(() => undefined);
+    const gate = Promise.all(first.map((k) => this.load(k)));
+    for (const k of rest) { const ac = new AbortController(); this.pending.set(k, ac); }
+    return gate.then(() => Promise.all(rest.map((k) => {
+      const ac = this.pending.get(k);
+      if (!ac || ac.signal.aborted || !this.want.has(k)) { if (ac && this.pending.get(k) === ac) this.pending.delete(k); return undefined; }
+      this.pending.delete(k); return this.load(k);
+    }))).then(() => undefined);
   }
   private async load(k: string) {
     const a = this.byKey.get(k)!, ac = new AbortController();
