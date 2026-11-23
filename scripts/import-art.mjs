@@ -6,6 +6,7 @@
 //   npcs:   {who}-idle (all resident in town), {who}-talk (one at a time, while that conversation is open)
 // The combined {who}-town compatibility atlases are not imported (loading them busts 32 MiB; RECIPE.md loading contract).
 // Actors the pack doesn't have (the cow) stay on the live art. Anchors: scripts/actor-anchors.py (hip line, ground = frame bottom).
+// Order 24: the Rogue's walk + attack come from the Order 23b sheets (O23_DIR, default /workspace/tristram-work/o23).
 // Usage: node scripts/import-art.mjs [srcDir] [phaseBDir]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -139,6 +140,38 @@ for (const dir of ['heroes', 'npcs', 'monsters']) {
       const [w, h] = m.size_wh;
       assets.push({ key, group, type: 'atlas', file: copy(`${dir}/${m.atlas}`), w, h, mib: mib(w, h), frames, ...L });
     }
+  }
+}
+// ---- Order 24: the Rogue's walk + attack (+ its ready stance and arrow) from the Order 23b sheets (O23 dir, default below).
+// scripts/rogue-o24.py packs trimmed atlases from the o23 raw frames with hip-line anchors; walk replaces the Phase B walk
+// (group hero-rogue-walk), attack/ready/arrow go to heroes/rogue-attack in the dungeon-only hero-rogue-combat group. The
+// Phase B rogue-combat atlas keeps cast/hit/death; its attack and ready frames are dropped from the manifest.
+{
+  const O23 = process.env.O23_DIR ?? '/workspace/tristram-work/o23';
+  if (fs.existsSync(path.join(O23, 'meta.json')) && anims.rogue) {
+    const meta = readJ(path.join(O23, 'meta.json'));
+    if (!/CC0/.test(meta.walk?.source ?? '')) throw new Error(`${O23}/meta.json: walk source is not CC0`);
+    const tmp = fs.mkdtempSync('/tmp/cot-o24-');
+    execFileSync('python3', [path.resolve('scripts/rogue-o24.py'), O23, tmp], { stdio: 'inherit' });
+    const R = readJ(path.join(tmp, 'rogue-o24.json'));
+    const L = { license: 'CC0 1.0', author: 'Project Tristram sprite director (Quaternius Universal Base Characters, Modular Character Outfits - Fantasy and Universal Animation Library Walk_Loop; ambientCG materials; self-made cloak, quiver, bow, arrow and attack keys)',
+      source: 'https://quaternius.com | https://ambientcg.com | /workspace/tristram-canon/CREDITS.md (Orders 22-23)' };
+    const put = (name, key, group) => {
+      const a = R.assets[name]; fs.copyFileSync(path.join(tmp, a.file), path.join(OUT, a.file));
+      const e = { key, group, type: 'atlas', file: a.file, w: a.w, h: a.h, mib: a.mib, frames: a.frames, ...L };
+      const i = assets.findIndex((x) => x.key === key); if (i >= 0) assets[i] = e; else assets.push(e);
+    };
+    put('walk', 'heroes/rogue-walk', 'hero-rogue-walk');
+    put('attack', 'heroes/rogue-attack', 'hero-rogue-combat');
+    const combat = assets.find((x) => x.key === 'heroes/rogue-combat');
+    if (combat) combat.frames = combat.frames.filter((f) => !/^rogue:(attack|ready):/.test(f.id));
+    const A = anims.rogue.actions;
+    A.walk = { n: meta.walk.frames, ms: Math.round(1000 / meta.walk.fps), asset: 'heroes/rogue-walk' };
+    // attack: all 16 frames on the wall clock at 20 fps from the start of the attack; release (arrow) on frame 8
+    A.attack = { n: meta.attack.frames, ms: 1000 / meta.attack.fps, asset: 'heroes/rogue-attack', clock: 'ms', release: meta.attack.release_frame };
+    A.ready = { n: 1, ms: 120, asset: 'heroes/rogue-attack' };
+    anims.rogue.nock = R.nock; anims.rogue.arrow = 'arrow';
+    console.log(`Order 24 rogue: walk ${R.assets.walk.mib} MiB, attack ${R.assets.attack.mib} MiB, scale ${R.scale.toFixed(4)}`);
   }
 }
 // Order 11c/19: the cow in /workspace/tristram-art was re-packed after it shipped (no order asked for it), so the shipped cow is

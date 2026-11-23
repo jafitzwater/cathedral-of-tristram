@@ -30,12 +30,14 @@ export const WALK_SPEED = 1 / (WALK_TICKS * TICK);
 const ATTACK_TICKS: Record<ClassId, { melee: number; bow: number; cast: number }> = {
   warrior: { melee: 16, bow: 16, cast: 20 }, rogue: { melee: 18, bow: 12, cast: 16 }, sorcerer: { melee: 16, bow: 20, cast: 12 },
 };
+/** Order 24: the Rogue's bow release, in ticks from the start of the attack (art frame 8 at 20 fps). */
+const BOW_RELEASE_TICKS: Partial<Record<ClassId, number>> = { rogue: 8 };
 
 export type LevelId = 'town' | 'l1';
 export interface Actor { x: number; y: number; tx: number; ty: number; dir: number; path: P[]; prog: number; state: 'idle' | 'walk' | 'attack' | 'hit' | 'cast' | 'block' | 'dead'; t: number; stepT: number }
 export interface Mon extends Actor { uid: number; def: MonsterDef; hp: number; maxHp: number; alive: boolean; active: boolean; fleeT: number; spoke: boolean; dealt: boolean; deathT: number; flash: number; staggerCd?: number }
 export interface GroundItem { item: Item; x: number; y: number }
-export interface Missile { kind: 'firebolt' | 'cbolt' | 'arrow' | 'hbolt' | 'lightning'; x: number; y: number; vx: number; vy: number; life: number; dmg: [number, number]; fire: [number, number]; light: [number, number]; toHit: number; wander?: number }
+export interface Missile { kind: 'firebolt' | 'cbolt' | 'arrow' | 'hbolt' | 'lightning'; x: number; y: number; vx: number; vy: number; life: number; dmg: [number, number]; fire: [number, number]; light: [number, number]; toHit: number; wander?: number; face?: number; fresh?: boolean }
 export interface Level { id: LevelId; dlvl: number; map: LevelMap; explored: Uint8Array; monsters: Mon[]; items: GroundItem[]; corpses: P[] }
 export type Target =
   | { kind: 'mon'; m: Mon } | { kind: 'npc'; npc: NpcDef } | { kind: 'item'; g: GroundItem } | { kind: 'obj'; o: Obj }
@@ -395,10 +397,10 @@ export class Game {
   }
 
   updatePlayer(dt: number) {
-    const p = this.p, h = this.hero;
+    const p = this.p;
     if (p.state === 'attack' || p.state === 'cast' || p.state === 'hit' || p.state === 'block') {
       p.t -= dt;
-      if (p.state === 'attack' && !p.stepT && p.t <= (ATTACK_TICKS[h.cls][this.d.bow ? 'bow' : 'melee'] * TICK) * 0.4) { p.stepT = 1; this.resolvePlayerAttack(); }
+      if (p.state === 'attack' && !p.stepT && this.actTotal - p.t >= this.releaseAt() - 1e-9) { p.stepT = 1; this.resolvePlayerAttack(); }
       if (p.t <= 0) { p.state = 'idle'; p.stepT = 0; }
       return;
     }
@@ -491,14 +493,28 @@ export class Game {
     this.attackTarget = m;
     this.sfx.push(this.d.bow ? 'bow' : 'swing');
   }
+  /** Seconds into the current attack when it resolves: 60% through (melee swing / bow shot), except the Rogue's bow shot,
+   * which leaves the string on attack frame 8 of 16 at 20 fps = 8 ticks in (Order 24; the 12-tick attack is unchanged). */
+  releaseAt(): number {
+    const h = this.hero, bow = !!this.d.bow, rel = bow ? BOW_RELEASE_TICKS[h.cls] : undefined;
+    return rel !== undefined ? rel * TICK : ATTACK_TICKS[h.cls][bow ? 'bow' : 'melee'] * TICK * 0.6;
+  }
   resolvePlayerAttack() {
     const m = this.attackTarget, h = this.hero, d = this.d;
-    if (!m) return;
+    if (!m) {
+      // Order 24: a bow shot with nothing targeted still looses an arrow along the facing (D1 shoots at the ground); its to-hit
+      // is rolled against whatever it meets (toHit -1)
+      if (d.bow) {
+        const f = DIRS[this.p.dir] ?? DIRS[0], l = Math.hypot(f.x, f.y);
+        this.missiles.push({ kind: 'arrow', x: this.p.x, y: this.p.y, vx: f.x / l * 16, vy: f.y / l * 16, life: 1.2, dmg: [-1, -1], fire: [d.weapon?.fMin ?? 0, d.weapon?.fMax ?? 0], light: [d.weapon?.lMin ?? 0, d.weapon?.lMax ?? 0], toHit: -1, face: this.p.dir, fresh: true });
+      }
+      return;
+    }
     if (!('def' in m)) { this.breakBarrel(m); return; }
     if (!m.alive) return;
     if (d.bow) {
       const ux = m.tx - this.p.tx, uy = m.ty - this.p.ty, l = Math.hypot(ux, uy) || 1;
-      this.missiles.push({ kind: 'arrow', x: this.p.x, y: this.p.y, vx: ux / l * 16, vy: uy / l * 16, life: 1.2, dmg: [-1, -1], fire: [d.weapon?.fMin ?? 0, d.weapon?.fMax ?? 0], light: [d.weapon?.lMin ?? 0, d.weapon?.lMax ?? 0], toHit: bowToHit(h, d, m.def.ac) });
+      this.missiles.push({ kind: 'arrow', x: this.p.x, y: this.p.y, vx: ux / l * 16, vy: uy / l * 16, life: 1.2, dmg: [-1, -1], fire: [d.weapon?.fMin ?? 0, d.weapon?.fMax ?? 0], light: [d.weapon?.lMin ?? 0, d.weapon?.lMax ?? 0], toHit: bowToHit(h, d, m.def.ac), face: this.p.dir, fresh: true });
       return;
     }
     // Order 10 B2: melee lands on a target in any of the 8 neighbour tiles of the hero's tile (D1 tile adjacency)
@@ -828,6 +844,8 @@ export class Game {
   updateMissiles(dt: number) {
     const lv = this.level;
     for (const ms of this.missiles) {
+      // Order 24: an arrow is drawn at the nock on the frame it is loosed, then flies from the next frame
+      if (ms.fresh) { ms.fresh = false; continue; }
       const sub = 4;
       for (let s = 0; s < sub && ms.life > 0; s++) {
         if (ms.wander) { const a = (this.rng.next() - 0.5) * 0.6; const c = Math.cos(a), sn = Math.sin(a); [ms.vx, ms.vy] = [ms.vx * c - ms.vy * sn, ms.vy * c + ms.vx * sn]; }
@@ -840,7 +858,7 @@ export class Game {
           ms.life = 0;
           const h = this.hero, d = this.d;
           if (ms.kind === 'arrow') {
-            if (this.rng.int(100) < ms.toHit) {
+            if (this.rng.int(100) < (ms.toHit < 0 ? bowToHit(h, d, m.def.ac) : ms.toHit)) {
               let dam = rollDamage(h, d, this.rng);
               if (ms.fire[1]) dam += this.elemental(m, 'fire', ms.fire[0] + this.rng.int(ms.fire[1] - ms.fire[0] + 1));
               if (ms.light[1]) dam += this.elemental(m, 'light', ms.light[0] + this.rng.int(ms.light[1] - ms.light[0] + 1));

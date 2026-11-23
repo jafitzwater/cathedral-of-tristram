@@ -105,6 +105,8 @@ const T = { idle: 120, ready: 120, walk: 80, attack: 70, cast: 80, hit: 70, deat
 for (const [actor, info] of Object.entries(m.anims)) {
   for (const [action, a] of Object.entries(info.actions)) {
     if (info.kind === 'animal') assert.ok(a.ms >= 100 && a.ms <= 400, `${actor} ${action} timing`); // Order 14: the cow's slow D1 idle keeps its own rate
+    else if (actor === 'rogue' && action === 'walk') assert.equal(a.ms, 83, 'Order 24 rogue walk: 8 frames at 12 fps');
+    else if (actor === 'rogue' && action === 'attack') assert.ok(a.ms === 50 && a.n === 16 && a.clock === 'ms' && a.release === 8, 'Order 24 rogue attack: 16 frames at 20 fps, release on 8');
     else assert.equal(a.ms, T[action], `${actor} ${action} timing`);
     const asset = m.assets.find((x) => x.key === a.asset)!;
     for (const dn of DIR_NAME) for (let i = 0; i < a.n; i++) {
@@ -127,7 +129,20 @@ assert.ok(m.anims.butcher.height > 88);
 for (const c of CLASSES) {
   const A = m.anims[c].actions;
   assert.equal(A.idle.asset, `heroes/${c}-idle`); assert.equal(A.walk.asset, `heroes/${c}-walk`);
-  for (const k of ['ready', 'attack', 'cast', 'hit', 'death']) assert.equal(A[k].asset, `heroes/${c}-combat`, `${c} ${k}`);
+  // Order 24: the Rogue's attack + ready (attack frame 0) come from the Order 23b atlas, in the same dungeon-only group
+  for (const k of ['ready', 'attack', 'cast', 'hit', 'death']) assert.equal(A[k].asset, c === 'rogue' && (k === 'attack' || k === 'ready') ? 'heroes/rogue-attack' : `heroes/${c}-combat`, `${c} ${k}`);
+}
+{
+  const ra = m.assets.find((x) => x.key === 'heroes/rogue-attack')!, rc = m.assets.find((x) => x.key === 'heroes/rogue-combat')!;
+  assert.equal(ra.group, 'hero-rogue-combat'); assert.equal(m.assets.find((x) => x.key === 'heroes/rogue-walk')!.group, 'hero-rogue-walk');
+  assert.ok(!rc.frames!.some((f) => /^rogue:(attack|ready):/.test(f.id)), 'old rogue attack/ready frames dropped');
+  const an = m.anims.rogue;
+  for (const dn of DIR_NAME) {
+    assert.ok(ra.frames!.some((f) => f.id === `arrow:${dn}`), `arrow:${dn}`);
+    const nk = an.nock![dn]; assert.ok(nk && Math.abs(nk[0]) < 30 && nk[1] < -50 && nk[1] > -85, `nock ${dn} at the bow hand (${nk})`);
+  }
+  // hero ~88 px: the S standing frame (ready) is 88 px sole-to-crown, the feet on the anchor row
+  const r0 = ra.frames!.find((f) => f.id === 'rogue:ready:s:0')!; assert.ok(Math.abs(r0.ay - 88) <= 1 && r0.ay <= r0.h, `rogue ready s height ${r0.ay}`);
 }
 // split-loading contract: one hero; town = its idle + walk + every NPC idle + the cow + at most one talk; dungeon = walk + combat
 for (const c of CLASSES) {
@@ -144,6 +159,10 @@ console.log(`town worst while talking: ${Math.max(...CLASSES.flatMap((c) => ['ad
 assert.equal(animIndex({ n: 16, ms: 70, asset: '' }, 'attack', 0, 0.999), 15);
 assert.equal(animIndex({ n: 8, ms: 80, asset: '' }, 'walk', 80 * 9, undefined), 1);
 assert.equal(animIndex({ n: 15, ms: 100, asset: '' }, 'death', 99999), 14);
+// Order 24: an attack on its own clock plays at its fps from the start (frame 8 at 400 ms) and holds the last frame
+assert.equal(animIndex({ n: 16, ms: 50, asset: '', clock: 'ms' }, 'attack', 400, 0.1), 8);
+assert.equal(animIndex({ n: 16, ms: 50, asset: '', clock: 'ms' }, 'attack', 399, 0.9), 7);
+assert.equal(animIndex({ n: 16, ms: 50, asset: '', clock: 'ms' }, 'attack', 5000, 1), 15);
 
 // ---- zone tracker: town / cathedral engage + release / Butcher room ----
 {

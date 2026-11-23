@@ -1,11 +1,11 @@
 // Canvas 2D isometric world renderer. Actors come from the CC0 atlases (src/art.ts) at their packed scale; while an atlas is
 // still loading (or released by the zone groups) a dim silhouette stands in.
-import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, type P } from './iso';
+import { TILE_H, TILE_W, view, tileToScreen, dirOf, pickTile, DIRS, type P } from './iso';
 import type { NpcDef } from './levels/town';
 import { T, TALL, WALKABLE, at } from './levels/types';
 import { BUILDINGS, TAVERN_LIGHT, TOWN_PORTAL_SPOT, cowArt, inBrush, type Building, type Dress } from './levels/town';
 import { buildingFade, frontS, sortKey, type SpriteBox } from './townArt';
-import { art, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
+import { art, DIR_NAME, drawActor, drawCell, drawFrame, hasFrame, MON_ART } from './art';
 import { WALL_PX, plainAbove, roomAt, stackPieces, wallData, wallFade } from './walls';
 import { itemIconId } from './hud';
 import type { Actor, Game, Target } from './game';
@@ -141,6 +141,7 @@ export function drawWorld(c: CanvasRenderingContext2D, g: Game, time: number) {
   // missiles
   for (const ms of g.missiles) {
     const p = tileToScreen(ms.x, ms.y);
+    if (ms.kind === 'arrow' && drawArrow(c, g, ms, p.x + cam.x, p.y + cam.y + TILE_H / 2)) continue;
     c.fillStyle = ms.kind === 'firebolt' ? '#ff8a20' : ms.kind === 'arrow' ? '#ddd' : ms.kind === 'hbolt' ? '#fff8c0' : '#9cf';
     c.beginPath(); c.arc(p.x + cam.x, p.y + cam.y + TILE_H / 2 - 24, ms.kind === 'arrow' ? 2 : 5, 0, Math.PI * 2); c.fill();
   }
@@ -345,10 +346,22 @@ function actorPose(o: Actor, now: number, deathMs?: number): { action: string; m
     default: return { action: 'idle', ms: now * 1000 };
   }
 }
+/** Order 24: when the hero's attack started (scene clock), for an attack that plays on its own clock (the Rogue's 16 frames at
+ * 20 fps): the frames past the end of the 12-tick attack (12-15, the recovery) finish while the hero stands. */
+const attackT0 = new WeakMap<object, number>();
 function drawPlayer(c: CanvasRenderingContext2D, g: Game, a: Actor, cam: P, time: number) {
   const p = tileToScreen(a.x, a.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;
   const cls = g.hero.cls, h = heightOf(cls, 96);
-  const pose = g.dead ? { action: 'death', ms: stateClock(a, 'dead', time, 0).ms } : actorPose(a, time);
+  let pose = g.dead ? { action: 'death', ms: stateClock(a, 'dead', time, 0).ms } as ReturnType<typeof actorPose> : actorPose(a, time);
+  const atk = art.anim(cls, 'attack');
+  if (atk?.clock === 'ms' && !g.dead) {
+    if (a.state === 'attack') { const el = Math.max(0, g.actTotal - a.t); pose = { action: 'attack', ms: el * 1000, progress: el / Math.max(1e-3, g.actTotal) }; attackT0.set(a, time - el); }
+    else if (a.state === 'idle') {
+      const t0 = attackT0.get(a);
+      if (t0 !== undefined && (time - t0) * 1000 < atk.n * atk.ms) pose = { action: 'attack', ms: (time - t0) * 1000, progress: 1 };
+      else attackT0.delete(a);
+    } else attackT0.delete(a);
+  }
   // Order 17b/19: the relaxed town idle in town; outside town the ready (dungeon) stance, which attack and cast start from
   if (pose.action === 'idle' && g.cur !== 'town') pose.action = 'ready';
   shadow(c, x, y, h);
@@ -357,6 +370,19 @@ function drawPlayer(c: CanvasRenderingContext2D, g: Game, a: Actor, cam: P, time
     const alt = a.state === 'walk' ? ['walk'] : ['idle', 'ready', 'walk'];
     if (!alt.some((act) => drawActor(c, cls, act, a.dir, act === 'walk' && a.state !== 'walk' ? 0 : time * 1000, x, y))) silhouette(c, x, y, h);
   }
+}
+/** Order 24: the hero's arrow as its facing's sprite (anchored on the tail), carried at the nock height of the facing it was
+ * shot from, so it leaves the bow on the release frame. False (the old dot) for classes without arrow art or while loading. */
+const SCREEN_DIRS = DIRS.map((d) => { const sx = (d.x - d.y) * TILE_W / 2, sy = (d.x + d.y) * TILE_H / 2, l = Math.hypot(sx, sy); return { x: sx / l, y: sy / l }; });
+function drawArrow(c: CanvasRenderingContext2D, g: Game, ms: Game['missiles'][number], x: number, y: number): boolean {
+  const an = art.m?.anims[g.hero.cls];
+  if (!an?.nock || !an.arrow) return false;
+  const sx = (ms.vx - ms.vy) * TILE_W / 2, sy = (ms.vx + ms.vy) * TILE_H / 2;
+  let best = 0, bd = -Infinity;
+  SCREEN_DIRS.forEach((d, i) => { const v = d.x * sx + d.y * sy; if (v > bd) { bd = v; best = i; } });
+  const nk = an.nock[DIR_NAME[(ms.face ?? best) & 7]];
+  if (!nk) return false;
+  return drawFrame(c, `${an.arrow}:${DIR_NAME[best]}`, x + nk[0], y + nk[1]);
 }
 function drawNpc(c: CanvasRenderingContext2D, g: Game, n: NpcDef, cam: P, sprites: Sprite[], time: number) {
   const p = tileToScreen(n.x, n.y), x = p.x + cam.x, y = p.y + cam.y + TILE_H / 2;

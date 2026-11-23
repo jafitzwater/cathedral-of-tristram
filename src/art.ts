@@ -5,8 +5,10 @@
 // and draw a fallback silhouette.
 export interface Frame { id: string; x: number; y: number; w: number; h: number; ax: number; ay: number; ms?: number; slots?: [number, number]; cell?: [number, number]; eaves?: number; fp_m?: [number, number]; fp_tiles?: [number, number] }
 export interface ArtAsset { key: string; group: string; type: 'atlas' | 'image'; file: string; w: number; h: number; mib: number; frames?: Frame[]; license: string; author: string; source: string }
-export interface AnimInfo { n: number; ms: number; asset: string }
-export interface ArtManifest { version: number; groups: Record<string, string[]>; anims: Record<string, { kind: string; height: number; actions: Record<string, AnimInfo> }>; assets: ArtAsset[] }
+/** clock 'ms': a timed action that plays at its own fps from the action's start (not spread over the game duration);
+ * release: the frame the shot leaves the bow on (Order 24 Rogue attack). */
+export interface AnimInfo { n: number; ms: number; asset: string; clock?: 'ms'; release?: number }
+export interface ArtManifest { version: number; groups: Record<string, string[]>; anims: Record<string, { kind: string; height: number; actions: Record<string, AnimInfo>; nock?: Record<string, [number, number]>; arrow?: string }>; assets: ArtAsset[] }
 export interface Decoded { img: CanvasImageSource; close(): void }
 export type Loader = (url: string, signal: AbortSignal) => Promise<Decoded>;
 /** Post-decode pixel pass for one asset (same size, replaces the decoded image; Order 10 U5 wall brightening). */
@@ -217,9 +219,11 @@ export function artScreenAngle(label: string, elevDeg = 30): number {
 /**
  * Frame index for an action. Looping actions (idle, walk, talk) run at the manifest timings. Timed actions (attack, cast, hit)
  * are spread over the game's D1 duration (`progress` 0..1) so the hit lands on the same frame as the rules; death plays at the
- * manifest timing and holds its last frame.
+ * manifest timing and holds its last frame. Order 24: an action with clock 'ms' (the Rogue's attack) plays its frames at the
+ * manifest fps from the start of the action and holds the last one.
  */
 export function animIndex(info: AnimInfo, action: string, ms: number, progress?: number): number {
+  if (info.clock === 'ms' && action !== 'death' && progress !== undefined) return Math.min(info.n - 1, Math.max(0, Math.floor(ms / info.ms)));
   if (progress !== undefined) return Math.min(info.n - 1, Math.max(0, Math.floor(progress * info.n)));
   const i = Math.floor(ms / info.ms);
   return action === 'death' ? Math.min(info.n - 1, i) : i % info.n;
