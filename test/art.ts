@@ -105,6 +105,7 @@ const T = { idle: 120, ready: 120, walk: 80, attack: 70, cast: 80, hit: 70, deat
 for (const [actor, info] of Object.entries(m.anims)) {
   for (const [action, a] of Object.entries(info.actions)) {
     if (info.kind === 'animal') assert.ok(a.ms >= 100 && a.ms <= 400, `${actor} ${action} timing`); // Order 14: the cow's slow D1 idle keeps its own rate
+    else if (actor === 'rogue' && ['idle', 'ready', 'hit', 'cast', 'death'].includes(action)) assert.equal(a.ms, { idle: 100, ready: 100, hit: 67, cast: 50, death: 83 }[action], `Order 27 rogue ${action} timing (o26 fps)`);
     else if (actor === 'rogue' && action === 'walk') assert.equal(a.ms, 83, 'Order 24 rogue walk: 8 frames at 12 fps');
     else if (actor === 'rogue' && action === 'attack') assert.ok(a.ms === 50 && a.n === 16 && a.clock === 'ms' && a.release === 8, 'Order 24 rogue attack: 16 frames at 20 fps, release on 8');
     else assert.equal(a.ms, T[action], `${actor} ${action} timing`);
@@ -130,19 +131,22 @@ for (const c of CLASSES) {
   const A = m.anims[c].actions;
   assert.equal(A.idle.asset, `heroes/${c}-idle`); assert.equal(A.walk.asset, `heroes/${c}-walk`);
   // Order 24: the Rogue's attack + ready (attack frame 0) come from the Order 23b atlas, in the same dungeon-only group
-  for (const k of ['ready', 'attack', 'cast', 'hit', 'death']) assert.equal(A[k].asset, c === 'rogue' && (k === 'attack' || k === 'ready') ? 'heroes/rogue-attack' : `heroes/${c}-combat`, `${c} ${k}`);
+  // Order 24/27: the Rogue's attack (+ arrow) is its own atlas in the same dungeon-only group; ready/hit/cast/death are the o26 rig's
+  for (const k of ['ready', 'attack', 'cast', 'hit', 'death']) assert.equal(A[k].asset, c === 'rogue' && k === 'attack' ? 'heroes/rogue-attack' : `heroes/${c}-combat`, `${c} ${k}`);
 }
 {
   const ra = m.assets.find((x) => x.key === 'heroes/rogue-attack')!, rc = m.assets.find((x) => x.key === 'heroes/rogue-combat')!;
   assert.equal(ra.group, 'hero-rogue-combat'); assert.equal(m.assets.find((x) => x.key === 'heroes/rogue-walk')!.group, 'hero-rogue-walk');
-  assert.ok(!rc.frames!.some((f) => /^rogue:(attack|ready):/.test(f.id)), 'old rogue attack/ready frames dropped');
+  assert.ok(!rc.frames!.some((f) => /^rogue:attack:/.test(f.id)), 'no attack frames in rogue-combat');
+  // Order 27: no Phase B Rogue frame anywhere: every Rogue atlas carries the Orders 22-26b credit, none the Phase B (MPFB) one
+  for (const a of m.assets.filter((x) => x.key.startsWith('heroes/rogue-'))) assert.ok(/Universal Base Characters/.test(a.author) && !/MPFB|MakeHuman/.test(a.author), `${a.key} is new-rig art`);
   const an = m.anims.rogue;
   for (const dn of DIR_NAME) {
     assert.ok(ra.frames!.some((f) => f.id === `arrow:${dn}`), `arrow:${dn}`);
     const nk = an.nock![dn]; assert.ok(nk && Math.abs(nk[0]) < 30 && nk[1] < -50 && nk[1] > -85, `nock ${dn} at the bow hand (${nk})`);
   }
   // hero ~88 px: the S standing frame (ready) is 88 px sole-to-crown, the feet on the anchor row
-  const r0 = ra.frames!.find((f) => f.id === 'rogue:ready:s:0')!; assert.ok(Math.abs(r0.ay - 88) <= 1 && r0.ay <= r0.h, `rogue ready s height ${r0.ay}`);
+  const r0 = rc.frames!.find((f) => f.id === 'rogue:ready:s:0')!; assert.ok(Math.abs(r0.ay - 88) <= 1 && r0.ay <= r0.h, `rogue ready s height ${r0.ay}`);
 }
 // split-loading contract: one hero; town = its idle + walk + every NPC idle + the cow + at most one talk; dungeon = walk + combat
 for (const c of CLASSES) {
